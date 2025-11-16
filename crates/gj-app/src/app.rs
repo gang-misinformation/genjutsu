@@ -1,144 +1,87 @@
+use std::sync::Arc;
 use egui_wgpu::wgpu;
 use winit::{
     event::*,
-    event_loop::EventLoop,
-    window::Window,
+    event_loop::ActiveEventLoop,
 };
-use egui_winit::State as EguiState;
+use winit::application::ApplicationHandler;
+use winit::window::{WindowAttributes, WindowId};
+use crate::events::GjEvent;
 use crate::state::AppState;
 use crate::ui;
+use crate::ui::UiState;
 
-pub(crate) struct App<'wnd> {
-    pub(crate) window: &'wnd Window,
-    pub(crate) app_state: AppState<'wnd>,
-    egui_state: EguiState,
-    egui_renderer: egui_wgpu::Renderer,
+#[derive(Default)]
+pub struct App {
+    state: Option<AppState>
 }
 
-impl<'wnd> App<'wnd> {
-    pub(crate) async fn new(window: &'wnd Window) -> Self {
-        let app_state = AppState::new(&window).await;
+impl ApplicationHandler<GjEvent> for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let window_attributes = WindowAttributes::default()
+            .with_title("Gaussian Splatting Viewer")
+            .with_inner_size(winit::dpi::LogicalSize::new(1600.0, 900.0));
 
-        let egui_ctx = egui::Context::default();
-        let egui_state = egui_winit::State::new(
-            egui_ctx.clone(),
-            egui::ViewportId::ROOT,
-            &window,
-            None,
-            None,
-            None
-        );
+        let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
-        let egui_renderer = egui_wgpu::Renderer::new(
-            &app_state.device,
-            app_state.config.format,
-            egui_wgpu::RendererOptions::default()
-        );
-
-        Self {
-            window,
-            app_state,
-            egui_state,
-            egui_renderer,
-        }
+        let state = pollster::block_on(AppState::new(window.clone())).unwrap();
+        self.state = Some(state);
     }
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: GjEvent) {
+        if let Some(state) = &mut self.state {
+            match event {
+                GjEvent::Ui(e) => {
 
-
-
-    pub(crate) fn input(&mut self, event: &WindowEvent) -> bool {
-        let response = self.egui_state.on_window_event(&self.window, event);
-
-        if response.consumed {
-            return true;
-        }
-
-        self.app_state.input(event)
-    }
-
-    pub(crate) fn update(&mut self) {
-        self.app_state.update();
-    }
-
-    pub(crate) fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.app_state.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self.app_state.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
+                }
+                GjEvent::App(e) => {
+                    state.ui.push_app_event(e);
+                }
             }
-        );
-
-        // Render 3D scene
-        self.app_state.render_scene(&mut encoder, &view);
-
-        // Prepare egui
-        let egui_state = &mut self.egui_state;
-        let raw_input = egui_state.take_egui_input(&self.window);
-
-        let full_output = egui_state.egui_ctx().run(raw_input, |ctx| {
-            ui::draw_ui(ctx, &mut self.app_state);
-        });
-
-        // Render egui
-        egui_state.handle_platform_output(self.window, full_output.platform_output);
-
-        let paint_jobs = egui_state.egui_ctx().tessellate(full_output.shapes, full_output.pixels_per_point);
-
-        let screen_descriptor = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [self.app_state.size.width, self.app_state.size.height],
-            pixels_per_point: self.window.scale_factor() as f32,
+        }
+    }
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        let Some(state) = &mut self.state else {
+            return;
         };
 
-        for (id, image_delta) in &full_output.textures_delta.set {
-            self.egui_renderer.update_texture(
-                &self.app_state.device,
-                &self.app_state.queue,
-                *id,
-                image_delta,
-            );
+        if state.window.id() != window_id {
+            return;
         }
 
-        self.egui_renderer.update_buffers(
-            &self.app_state.device,
-            &self.app_state.queue,
-            &mut encoder,
-            &paint_jobs,
-            &screen_descriptor,
-        );
+        // Let egui handle the event first
+        let response = state.ui.egui_state.on_window_event(&state.window, &event);
 
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Egui Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            self.egui_renderer.render(&mut render_pass.forget_lifetime(), &paint_jobs, &screen_descriptor);
+        if response.repaint {
+            state.window.request_redraw();
         }
 
-        for id in &full_output.textures_delta.free {
-            self.egui_renderer.free_texture(id);
+        // Handle events not consumed by egui
+        if !response.consumed {
+            match event {
+                WindowEvent::CloseRequested => {
+                    event_loop.exit();
+                }
+                WindowEvent::Resized(physical_size) => {
+                    state.resize(physical_size);
+                }
+                WindowEvent::RedrawRequested => {
+                    state.update();
+                    state.render();
+                }
+                _ => {
+                    state.input(&event);
+                }
+            }
         }
-
-        self.app_state.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-
-        Ok(())
     }
-
-    pub(crate) fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        self.app_state.resize(new_size);
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(state) = &self.state {
+            state.window.request_redraw();
+        }
     }
 }
-

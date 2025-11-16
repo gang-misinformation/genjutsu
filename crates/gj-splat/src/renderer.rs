@@ -7,8 +7,6 @@ use crate::camera::Camera;
 struct GaussianVertex {
     position: [f32; 3],
     color: [f32; 3],
-    opacity: f32,
-    _padding: f32,
 }
 
 #[repr(C)]
@@ -34,8 +32,8 @@ impl GaussianRenderer {
         format: wgpu::TextureFormat,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Gaussian Shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER_SOURCE.into()),
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -49,7 +47,7 @@ impl GaussianRenderer {
             label: Some("Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -75,7 +73,7 @@ impl GaussianRenderer {
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Gaussian Pipeline"),
+            label: Some("Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -87,8 +85,6 @@ impl GaussianRenderer {
                     attributes: &wgpu::vertex_attr_array![
                         0 => Float32x3,
                         1 => Float32x3,
-                        2 => Float32,
-                        3 => Float32,
                     ],
                 }],
             },
@@ -98,7 +94,7 @@ impl GaussianRenderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -134,14 +130,12 @@ impl GaussianRenderer {
             .map(|i| GaussianVertex {
                 position: cloud.positions[i],
                 color: cloud.colors[i],
-                opacity: cloud.opacity[i],
-                _padding: 0.0,
             })
             .collect();
 
         self.vertex_buffer = Some(
             self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Gaussian Vertex Buffer"),
+                label: Some("Vertex Buffer"),
                 contents: bytemuck::cast_slice(&vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             })
@@ -151,11 +145,12 @@ impl GaussianRenderer {
     }
 
     pub fn render(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
         camera: &Camera,
+        _viewport_size: (u32, u32),
     ) {
         let uniforms = Uniforms {
             view_proj: camera.view_projection_matrix().to_cols_array_2d(),
@@ -164,18 +159,13 @@ impl GaussianRenderer {
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Gaussian Render Pass"),
+            label: Some("Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.1,
-                        b: 0.1,
-                        a: 1.0,
-                    }),
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -194,14 +184,14 @@ impl GaussianRenderer {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
 
-        if let Some(ref vertex_buffer) = self.vertex_buffer {
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        if let Some(ref vb) = self.vertex_buffer {
+            render_pass.set_vertex_buffer(0, vb.slice(..));
             render_pass.draw(0..self.num_gaussians, 0..1);
         }
     }
 }
 
-const SHADER_SOURCE: &str = r#"
+const SHADER: &str = r#"
 struct Uniforms {
     view_proj: mat4x4<f32>,
 }
@@ -212,13 +202,11 @@ var<uniform> uniforms: Uniforms;
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) color: vec3<f32>,
-    @location(2) opacity: f32,
 }
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec3<f32>,
-    @location(1) opacity: f32,
 }
 
 @vertex
@@ -226,12 +214,11 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.clip_position = uniforms.view_proj * vec4<f32>(in.position, 1.0);
     out.color = in.color;
-    out.opacity = in.opacity;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, in.opacity);
+    return vec4<f32>(in.color, 1.0);
 }
 "#;
