@@ -13,6 +13,7 @@ use gj_splat::renderer::GaussianRenderer;
 
 use crate::events::{AppEvent, UiEvent};
 use crate::gfx::GfxState;
+use crate::lgm_worker::{LGMWorker, WorkerResponse};
 use crate::ui::UiState;
 
 pub struct AppState {
@@ -26,12 +27,11 @@ pub struct AppState {
     pub camera: Camera,
     pub gaussian_cloud: Option<GaussianCloud>,
 
-    // LGM pipeline
-    pub lgm_pipeline:  Arc<LGMPipeline<Wgpu>>,
-
     // App-side state exposed to UI
     pub prompt: String,
     pub status: String,
+
+    pub lgm_worker: LGMWorker,
 
     // Mouse state
     pub mouse_pressed: bool,
@@ -57,10 +57,10 @@ impl AppState {
         camera.aspect_ratio = size.width as f32 / size.height as f32;
 
         let lgm_device = Default::default();
-        let lgm_pipeline = Arc::new(LGMPipeline::new(lgm_device));
+        let lgm_worker = LGMWorker::new::<Wgpu>(lgm_device);
 
         let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(4)
             .enable_all()
             .build()?;
 
@@ -68,7 +68,7 @@ impl AppState {
             window,
             renderer,
             camera,
-            lgm_pipeline,
+            lgm_worker,
             gfx,
             ui,
             gaussian_cloud: None,
@@ -147,6 +147,29 @@ impl AppState {
     // --- Event processing from UI ------------------------------------------
 
     pub fn update(&mut self) {
+        // Check for responses from the LGM worker
+        while let Some(response) = self.lgm_worker.try_recv_response() {
+            match response {
+                WorkerResponse::Success(cloud) => {
+                    self.renderer.load_gaussians(&cloud);
+                    self.gaussian_cloud = Some(cloud);
+                    self.ui.push_app_event(AppEvent::SceneReady);
+                }
+                WorkerResponse::Error(err) => {
+                    self.status = format!("Error: {}", err);
+                    self.ui.push_app_event(AppEvent::Status(self.status.clone()));
+                    self.ui.push_app_event(AppEvent::Log(format!("Pipeline error: {}", err)));
+                }
+                WorkerResponse::Progress(p) => {
+                    self.ui.push_app_event(AppEvent::Progress(p));
+                }
+                WorkerResponse::Status(s) => {
+                    self.status = s.clone();
+                    self.ui.push_app_event(AppEvent::Status(s));
+                }
+            }
+        }
+
         let ui_events = self.ui.take_ui_events();
 
         for ev in ui_events {
@@ -163,28 +186,78 @@ impl AppState {
                     self.ui.push_app_event(AppEvent::WireframeState(enabled));
                 }
 
+                UiEvent::GenerateFromPrompt(prompt) => {
+                    let worker_tx = self.lgm_worker.command_tx.clone();
+                    let ui_tx = self.ui.app_event_sender_clone();
+                    let window = self.window.clone();
+                    let prompt_clone = prompt.clone();
+
+                    // Update local prompt state
+                    self.prompt = prompt;
+
+                    // Spawn generation on background thread
+                    self.rt.spawn_blocking(move || {
+                        let _ = ui_tx.send(AppEvent::Status(
+                            format!("Generating from: '{}'", prompt_clone)
+                        ));
+
+                        // Send prompt to worker for processing
+                        if let Err(e) = worker_tx.send(crate::lgm_worker::WorkerCommand::GenerateFromPrompt(prompt_clone)) {
+                            let _ = ui_tx.send(AppEvent::Status(format!("Worker error: {}", e)));
+                        }
+
+                        window.request_redraw();
+                    });
+                }
+
+                UiEvent::PromptChanged(new_prompt) => {
+                    self.prompt = new_prompt;
+                }
+
                 UiEvent::LoadImages => {
-                    let tx = self.ui.app_event_sender_clone();
+                    let window = self.window.clone();
+                    let worker_tx = self.lgm_worker.command_tx.clone();
+                    let ui_tx = self.ui.app_event_sender_clone();
 
-                    let pipeline = self.lgm_pipeline.clone(); // clone if Arc; otherwise wrap in Arc earlier.
+                    // Spawn file picker on blocking thread pool
+                    self.rt.spawn_blocking(move || {
+                        let _ = ui_tx.send(AppEvent::Status("Opening file dialog...".into()));
 
-                    if let Some(files) = rfd::FileDialog::new()
-                        .add_filter("Images", &["png", "jpg", "jpeg"])
-                        .pick_files()
-                    {
-                        let images: Result<Vec<_>, _> = files.iter()
-                            .map(|path| image::open(path).map(|img| img.to_rgba8()))
-                            .collect();
-                        let images = images.unwrap_or_else(|err| panic!("Failed to load images: {}", err));
-                        self.status = "Generating 3D...".to_string();
-                        let cloud = pipeline.generate(&images).unwrap();
-                        self.renderer.load_gaussians(&cloud);
-                        self.gaussian_cloud = Some(cloud.clone());
+                        if let Some(files) = rfd::FileDialog::new()
+                            .add_filter("Images", &["png", "jpg", "jpeg"])
+                            .pick_files()
+                        {
+                            let _ = ui_tx.send(AppEvent::Status("Loading images...".into()));
 
-                        self.status = format!("Generated {} Gaussians", cloud.count);
-                    }
-                    self.rt.spawn(async move {
-                        let _ = tx.send(AppEvent::SceneReady);
+                            // Load images on this thread
+                            let images: Result<Vec<_>, _> = files.iter()
+                                .enumerate()
+                                .map(|(i, path)| {
+                                    let progress = (i as f32) / (files.len() as f32);
+                                    let _ = ui_tx.send(AppEvent::Progress(progress));
+                                    image::open(path).map(|img| img.to_rgba8())
+                                })
+                                .collect();
+
+                            match images {
+                                Ok(images) => {
+                                    let _ = ui_tx.send(AppEvent::Status("Generating 3D model...".into()));
+
+                                    // Send images to worker for processing
+                                    if let Err(e) = worker_tx.send(crate::lgm_worker::WorkerCommand::GenerateFromImages(images)) {
+                                        let _ = ui_tx.send(AppEvent::Status(format!("Worker error: {}", e)));
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = ui_tx.send(AppEvent::Status(format!("Failed to load images: {}", e)));
+                                    let _ = ui_tx.send(AppEvent::Log(format!("Image load error: {}", e)));
+                                }
+                            }
+                        } else {
+                            let _ = ui_tx.send(AppEvent::Status("File selection cancelled".into()));
+                        }
+
+                        window.request_redraw();
                     });
                 }
 
@@ -199,6 +272,11 @@ impl AppState {
     // --- 3D rendering + UI rendering ---------------------------------------
 
     pub fn render(&mut self) -> anyhow::Result<()> {
+        let size = self.window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return Ok(());
+        }
+
         let output = self.gfx.surface.get_current_texture()?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.gfx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

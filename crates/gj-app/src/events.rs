@@ -9,6 +9,7 @@ pub enum GjEvent {
 pub enum UiEvent {
     ResetCamera,
     LoadImages,
+    GenerateFromPrompt(String),
     PromptChanged(String),
     ToggleWireframe(bool),
     Log(String),

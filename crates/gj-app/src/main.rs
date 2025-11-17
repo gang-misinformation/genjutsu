@@ -5,6 +5,7 @@ mod state;
 mod ui;
 mod events;
 mod gfx;
+mod lgm_worker;
 
 use std::error::Error;
 use egui_wgpu::wgpu;

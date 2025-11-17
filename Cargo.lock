@@ -3318,6 +3318,7 @@ name = "gj-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "burn",
  "burn-ndarray",
  "burn-wgpu",
  "bytemuck",

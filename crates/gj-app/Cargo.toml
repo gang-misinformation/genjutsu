@@ -12,6 +12,7 @@ gj-core.path = "../gj-core"
 gj-lgm.path = "../gj-lgm"
 gj-splat.path = "../gj-splat"
 anyhow.workspace = true
+burn.workspace = true
 burn-ndarray.workspace = true
 burn-wgpu.workspace = true
 bytemuck.workspace = true

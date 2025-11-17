@@ -2,27 +2,55 @@ use wgpu::util::DeviceExt;
 use gj_core::gaussian_cloud::GaussianCloud;
 use crate::camera::Camera;
 
+// Quad vertices for instanced rendering (4 corners of a billboard)
+const QUAD_VERTICES: &[[f32; 2]] = &[
+    [-1.0, -1.0],  // bottom-left
+    [1.0, -1.0],   // bottom-right
+    [-1.0, 1.0],   // top-left
+    [1.0, 1.0],    // top-right
+];
+
+const QUAD_INDICES: &[u16] = &[0, 1, 2, 2, 1, 3];
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct GaussianVertex {
+struct GaussianInstance {
     position: [f32; 3],
+    _padding1: f32,
     color: [f32; 3],
+    opacity: f32,
+    scale: [f32; 3],
+    _padding2: f32,
+    rotation: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     view_proj: [[f32; 4]; 4],
+    view: [[f32; 4]; 4],
+    camera_pos: [f32; 3],
+    _padding1: f32,
+    viewport: [f32; 2],
+    focal: [f32; 2],
 }
 
 pub struct GaussianRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
-    vertex_buffer: Option<wgpu::Buffer>,
+
+    quad_vertex_buffer: wgpu::Buffer,
+    quad_index_buffer: wgpu::Buffer,
+    instance_buffer: Option<wgpu::Buffer>,
+
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+
     num_gaussians: u32,
+
+    // Cache last camera state to avoid redundant updates
+    last_view_proj: Option<[[f32; 4]; 4]>,
 }
 
 impl GaussianRenderer {
@@ -31,9 +59,24 @@ impl GaussianRenderer {
         queue: wgpu::Queue,
         format: wgpu::TextureFormat,
     ) -> Self {
+        // Use the simplified, faster shader
+        let shader_source = include_str!("../shaders/gaussian.wgsl");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            label: Some("Gaussian Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+
+        // Create quad buffers
+        let quad_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Quad Vertex Buffer"),
+            contents: bytemuck::cast_slice(QUAD_VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let quad_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Quad Index Buffer"),
+            contents: bytemuck::cast_slice(QUAD_INDICES),
+            usage: wgpu::BufferUsages::INDEX,
         });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -47,7 +90,7 @@ impl GaussianRenderer {
             label: Some("Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -73,20 +116,66 @@ impl GaussianRenderer {
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Pipeline"),
+            label: Some("Gaussian Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<GaussianVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x3,
-                        1 => Float32x3,
-                    ],
-                }],
+                buffers: &[
+                    // Quad vertices (per-vertex)
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<[f32; 2]>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        }],
+                    },
+                    // Gaussian instances (per-instance)
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<GaussianInstance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &[
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x3,
+                                offset: 0,
+                                shader_location: 1, // position
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32,
+                                offset: 12,
+                                shader_location: 2, // _padding1
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x3,
+                                offset: 16,
+                                shader_location: 3, // color
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32,
+                                offset: 28,
+                                shader_location: 4, // opacity
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x3,
+                                offset: 32,
+                                shader_location: 5, // scale
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32,
+                                offset: 44,
+                                shader_location: 6, // _padding2
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: 48,
+                                shader_location: 7, // rotation
+                            },
+                        ],
+                    },
+                ],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -94,17 +183,30 @@ impl GaussianRenderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::PointList,
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None, // Don't cull for splats
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
+                depth_write_enabled: false, // Splats use alpha blending, not depth
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
@@ -118,30 +220,59 @@ impl GaussianRenderer {
             device,
             queue,
             pipeline,
-            vertex_buffer: None,
+            quad_vertex_buffer,
+            quad_index_buffer,
+            instance_buffer: None,
             uniform_buffer,
             bind_group,
             num_gaussians: 0,
+            last_view_proj: None,
         }
     }
 
     pub fn load_gaussians(&mut self, cloud: &GaussianCloud) {
-        let vertices: Vec<GaussianVertex> = (0..cloud.count)
-            .map(|i| GaussianVertex {
+        // Balanced filtering - aim for 20-50k splats
+        let instances: Vec<GaussianInstance> = (0..cloud.count)
+            .filter(|&i| {
+                let opacity = cloud.opacity[i];
+                let scale_avg = (cloud.scales[i][0] + cloud.scales[i][1] + cloud.scales[i][2]) / 3.0;
+
+                // Keep moderately visible splats
+                opacity > 0.1 && // More reasonable threshold
+                    scale_avg > 0.001 && // Skip tiny splats
+                    cloud.positions[i][0].is_finite() &&
+                    cloud.positions[i][1].is_finite() &&
+                    cloud.positions[i][2].is_finite()
+            })
+            .map(|i| GaussianInstance {
                 position: cloud.positions[i],
+                _padding1: 0.0,
                 color: cloud.colors[i],
+                opacity: (cloud.opacity[i] * 0.4).min(1.0),
+                scale: [
+                    (cloud.scales[i][0] * 0.5).max(0.002),
+                    (cloud.scales[i][1] * 0.5).max(0.002),
+                    (cloud.scales[i][2] * 0.5).max(0.002),
+                ],
+                _padding2: 0.0,
+                rotation: cloud.rotations[i],
             })
             .collect();
 
-        self.vertex_buffer = Some(
+        self.instance_buffer = Some(
             self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(&vertices),
+                label: Some("Instance Buffer"),
+                contents: bytemuck::cast_slice(&instances),
                 usage: wgpu::BufferUsages::VERTEX,
             })
         );
 
-        self.num_gaussians = cloud.count as u32;
+        self.num_gaussians = instances.len() as u32;
+        self.last_view_proj = None;
+
+        println!("Rendered {} / {} gaussians ({:.1}% kept)",
+                 instances.len(), cloud.count,
+                 100.0 * instances.len() as f32 / cloud.count.max(1) as f32);
     }
 
     pub fn render(
@@ -150,22 +281,50 @@ impl GaussianRenderer {
         view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
         camera: &Camera,
-        _viewport_size: (u32, u32),
+        viewport_size: (u32, u32),
     ) {
-        let uniforms = Uniforms {
-            view_proj: camera.view_projection_matrix().to_cols_array_2d(),
-        };
+        // Skip if no gaussians loaded
+        if self.num_gaussians == 0 {
+            return;
+        }
 
-        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        // Calculate focal length from FOV
+        let fov_rad = camera.fov.to_radians();
+        let focal_y = viewport_size.1 as f32 / (2.0 * (fov_rad / 2.0).tan());
+        let focal_x = focal_y * camera.aspect_ratio;
+
+        let view_proj = camera.view_projection_matrix().to_cols_array_2d();
+
+        // Only update uniforms if camera actually changed
+        let needs_update = self.last_view_proj.as_ref() != Some(&view_proj);
+
+        if needs_update {
+            let uniforms = Uniforms {
+                view_proj,
+                view: camera.view_matrix().to_cols_array_2d(),
+                camera_pos: camera.position.to_array(),
+                _padding1: 0.0,
+                viewport: [viewport_size.0 as f32, viewport_size.1 as f32],
+                focal: [focal_x, focal_y],
+            };
+
+            self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+            self.last_view_proj = Some(view_proj);
+        }
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Render Pass"),
+            label: Some("Gaussian Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.1,
+                        g: 0.1,
+                        b: 0.1,
+                        a: 1.0,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -183,42 +342,14 @@ impl GaussianRenderer {
 
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
 
-        if let Some(ref vb) = self.vertex_buffer {
-            render_pass.set_vertex_buffer(0, vb.slice(..));
-            render_pass.draw(0..self.num_gaussians, 0..1);
+        if let Some(ref instance_buffer) = self.instance_buffer {
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
+            render_pass.set_index_buffer(self.quad_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+
+            // Draw instanced quads - 6 indices per quad, num_gaussians instances
+            render_pass.draw_indexed(0..6, 0, 0..self.num_gaussians);
         }
     }
 }
-
-const SHADER: &str = r#"
-struct Uniforms {
-    view_proj: mat4x4<f32>,
-}
-
-@group(0) @binding(0)
-var<uniform> uniforms: Uniforms;
-
-struct VertexInput {
-    @location(0) position: vec3<f32>,
-    @location(1) color: vec3<f32>,
-}
-
-struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec3<f32>,
-}
-
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
-    var out: VertexOutput;
-    out.clip_position = uniforms.view_proj * vec4<f32>(in.position, 1.0);
-    out.color = in.color;
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, 1.0);
-}
-"#;

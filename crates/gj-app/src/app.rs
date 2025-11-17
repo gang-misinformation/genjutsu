@@ -13,7 +13,8 @@ use crate::ui::UiState;
 
 #[derive(Default)]
 pub struct App {
-    state: Option<AppState>
+    state: Option<AppState>,
+    needs_redraw: bool,
 }
 
 impl ApplicationHandler<GjEvent> for App {
@@ -26,6 +27,7 @@ impl ApplicationHandler<GjEvent> for App {
 
         let state = pollster::block_on(AppState::new(window.clone())).unwrap();
         self.state = Some(state);
+        self.needs_redraw = true;
     }
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: GjEvent) {
         if let Some(state) = &mut self.state {
@@ -35,6 +37,8 @@ impl ApplicationHandler<GjEvent> for App {
                 }
                 GjEvent::App(e) => {
                     state.ui.push_app_event(e);
+                    self.needs_redraw = true;
+                    state.window.request_redraw();
                 }
             }
         }
@@ -57,31 +61,78 @@ impl ApplicationHandler<GjEvent> for App {
         let response = state.ui.egui_state.on_window_event(&state.window, &event);
 
         if response.repaint {
+            self.needs_redraw = true;
             state.window.request_redraw();
         }
 
+        // For camera controls, we want to handle mouse events even if egui consumes them,
+        // but only if the mouse is NOT over any egui UI elements
+        let handle_camera_input = match &event {
+            WindowEvent::MouseInput { .. } |
+            WindowEvent::CursorMoved { .. } |
+            WindowEvent::MouseWheel { .. } => {
+                // Check if mouse is over UI
+                !state.ui.egui_ctx.is_pointer_over_area()
+            }
+            _ => false,
+        };
+
         // Handle events not consumed by egui
-        if !response.consumed {
+        if !response.consumed || handle_camera_input {
             match event {
                 WindowEvent::CloseRequested => {
                     event_loop.exit();
                 }
                 WindowEvent::Resized(physical_size) => {
                     state.resize(physical_size);
+                    self.needs_redraw = true;
                 }
                 WindowEvent::RedrawRequested => {
                     state.update();
-                    state.render();
+                    let _ = state.render();
+                    self.needs_redraw = false;
+                }
+                WindowEvent::CursorMoved { .. } |
+                WindowEvent::MouseWheel { .. } |
+                WindowEvent::MouseInput { .. } => {
+                    // Mouse events should trigger redraws for smooth camera control
+                    state.input(&event);
+                    self.needs_redraw = true;
+                    state.window.request_redraw();
                 }
                 _ => {
                     state.input(&event);
                 }
             }
+        } else {
+            // Even if egui consumed the event, check if we should handle it for camera
+            // Only handle camera input if the mouse is over the central panel (3D viewport)
+            match event {
+                WindowEvent::CursorMoved { .. } |
+                WindowEvent::MouseWheel { .. } => {
+                    // Always process camera input for these events
+                    // The camera controller will only respond if mouse is pressed
+                    state.input(&event);
+                    if state.mouse_pressed {
+                        self.needs_redraw = true;
+                        state.window.request_redraw();
+                    }
+                }
+                WindowEvent::MouseInput { .. } => {
+                    // Track mouse state even if egui consumed the click
+                    state.input(&event);
+                }
+                _ => {}
+            }
         }
     }
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(state) = &self.state {
-            state.window.request_redraw();
+        // Only request redraw if we actually need one
+        // Remove the constant redraw requests that were causing performance issues
+        if self.needs_redraw {
+            if let Some(state) = &self.state {
+                state.window.request_redraw();
+            }
         }
     }
 }
