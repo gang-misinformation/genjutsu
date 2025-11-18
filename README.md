@@ -6,6 +6,8 @@ A high-performance desktop application for generating interactive 3D scenes from
 ![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)
 ![WebGPU](https://img.shields.io/badge/WebGPU-%23000000.svg?style=for-the-badge&logo=webgpu&logoColor=white)
 
+![demo.png](screenshots/demo.png)
+
 ## 🎯 Features
 
 - **✨ Text-to-3D Generation**: Create 3D models from text descriptions
@@ -242,7 +244,7 @@ cd GaussianDreamer
 pip install -r requirements.txt
 
 # Download pre-trained models
-bash scripts/download_models.sh
+bash python/download_models.sh
 ```
 
 3. **Integrate with service**

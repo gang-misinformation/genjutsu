@@ -11,7 +11,7 @@ impl TopPanel {
     pub fn show(&mut self, ctx: &Context, sender: &mut UiEventSender) {
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("🎨 3D Generation Studio");
+                ui.heading("🎨 genjutsu");
                 ui.separator();
                 ui.label(RichText::new("Status:").color(Color32::LIGHT_BLUE));
                 // status display would be written by side panel pushing AppEvent::Status

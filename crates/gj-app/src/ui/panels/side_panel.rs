@@ -16,7 +16,7 @@ pub struct SidePanel {
 impl SidePanel {
     pub fn show(&mut self, ctx: &Context, sender: &mut UiEventSender) {
         egui::SidePanel::left("side_panel").default_width(320.0).show(ctx, |ui| {
-            ui.heading("3D Generation");
+            ui.heading("on foenem grave");
             ui.separator();
 
             // === Text-to-3D Section ===

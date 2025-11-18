@@ -59,29 +59,34 @@ impl LGMWorker {
                     }
                     Ok(WorkerCommand::GenerateFromPrompt(prompt)) => {
                         let _ = resp_tx.send(WorkerResponse::Status(
-                            format!("Generating images from: '{}'", prompt)
+                            format!("Generating from: '{}'", prompt)
                         ));
 
-                        // Generate multi-view images from prompt
-                        match gj_lgm::text_to_image::generate_multiview_from_prompt(&prompt) {
-                            Ok(images) => {
-                                let _ = resp_tx.send(WorkerResponse::Status("Running 3D generation...".into()));
+                        // Use GaussianDreamer service to generate .ply directly
+                        let config = gj_lgm::text_to_image::GaussianDreamerConfig::default();
 
-                                match pipeline.generate(&images) {
+                        match gj_lgm::text_to_image::generate_gaussians_from_prompt(&prompt, &config) {
+                            Ok(ply_path) => {
+                                let _ = resp_tx.send(WorkerResponse::Status("Loading generated Gaussians...".into()));
+
+                                // Load the .ply file
+                                match gj_core::gaussian_cloud::GaussianCloud::from_ply(&ply_path) {
                                     Ok(cloud) => {
                                         let _ = resp_tx.send(WorkerResponse::Status(
-                                            format!("Generated {} Gaussians from prompt", cloud.count)
+                                            format!("Loaded {} Gaussians from GaussianDreamer", cloud.count)
                                         ));
                                         let _ = resp_tx.send(WorkerResponse::Success(cloud));
                                     }
                                     Err(e) => {
-                                        let _ = resp_tx.send(WorkerResponse::Error(e.to_string()));
+                                        let _ = resp_tx.send(WorkerResponse::Error(
+                                            format!("Failed to load .ply: {}", e)
+                                        ));
                                     }
                                 }
                             }
                             Err(e) => {
                                 let _ = resp_tx.send(WorkerResponse::Error(
-                                    format!("Image generation failed: {}", e)
+                                    format!("GaussianDreamer generation failed: {}", e)
                                 ));
                             }
                         }
