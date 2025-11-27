@@ -13,8 +13,9 @@ use gj_splat::renderer::GaussianRenderer;
 
 use crate::events::{AppEvent, UiEvent};
 use crate::gfx::GfxState;
-use crate::lgm_worker::{LGMWorker, WorkerResponse};
+use crate::worker::{LGMWorker, WorkerResponse};
 use crate::ui::UiState;
+use crate::worker;
 
 pub struct AppState {
     pub(crate) window: Arc<Window>,
@@ -55,9 +56,8 @@ impl AppState {
         let mut camera = Camera::default();
         let size = window.inner_size();
         camera.aspect_ratio = size.width as f32 / size.height as f32;
-
-        let lgm_device = Default::default();
-        let lgm_worker = LGMWorker::new::<Wgpu>(lgm_device);
+        
+        let lgm_worker = LGMWorker::new();
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)
@@ -186,23 +186,23 @@ impl AppState {
                     self.ui.push_app_event(AppEvent::WireframeState(enabled));
                 }
 
-                UiEvent::GenerateFromPrompt(prompt) => {
+                UiEvent::GenerateWithModel { prompt, model } => {
                     let worker_tx = self.lgm_worker.command_tx.clone();
                     let ui_tx = self.ui.app_event_sender_clone();
                     let window = self.window.clone();
                     let prompt_clone = prompt.clone();
 
-                    // Update local prompt state
                     self.prompt = prompt;
 
-                    // Spawn generation on background thread
                     self.rt.spawn_blocking(move || {
                         let _ = ui_tx.send(AppEvent::Status(
-                            format!("Generating from: '{}'", prompt_clone)
+                            format!("Generating with {:?}...", model)
                         ));
 
-                        // Send prompt to worker for processing
-                        if let Err(e) = worker_tx.send(crate::lgm_worker::WorkerCommand::GenerateFromPrompt(prompt_clone)) {
+                        if let Err(e) = worker_tx.send(worker::WorkerCommand::GenerateFromPrompt {
+                            prompt: prompt_clone,
+                            model: model.into() // Convert UI model to worker model
+                        }) {
                             let _ = ui_tx.send(AppEvent::Status(format!("Worker error: {}", e)));
                         }
 
@@ -244,7 +244,7 @@ impl AppState {
                                     let _ = ui_tx.send(AppEvent::Status("Generating 3D model...".into()));
 
                                     // Send images to worker for processing
-                                    if let Err(e) = worker_tx.send(crate::lgm_worker::WorkerCommand::GenerateFromImages(images)) {
+                                    if let Err(e) = worker_tx.send(crate::worker::WorkerCommand::GenerateFromImages(images)) {
                                         let _ = ui_tx.send(AppEvent::Status(format!("Worker error: {}", e)));
                                     }
                                 }

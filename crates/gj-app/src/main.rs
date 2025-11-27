@@ -5,15 +5,10 @@ mod state;
 mod ui;
 mod events;
 mod gfx;
-mod lgm_worker;
+mod worker;
 
 use std::error::Error;
-use egui_wgpu::wgpu;
-use tokio::task::LocalSet;
-use winit::event::{ElementState, Event, KeyEvent, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::Window;
 use crate::events::GjEvent;
 
 fn main() -> Result<(), Box<dyn Error>> {

@@ -1,20 +1,23 @@
+use gj_core::Model3D;
+
 #[derive(Debug, Clone)]
 pub enum GjEvent {
     Ui(UiEvent),
     App(AppEvent)
 }
 
-
 #[derive(Debug, Clone)]
 pub enum UiEvent {
     ResetCamera,
     LoadImages,
-    GenerateFromPrompt(String),
+    GenerateWithModel {
+        prompt: String,
+        model: Model3D,
+    },
     PromptChanged(String),
     ToggleWireframe(bool),
     Log(String),
 }
-
 
 #[derive(Debug, Clone)]
 pub enum AppEvent {

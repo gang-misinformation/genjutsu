@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use egui_wgpu::wgpu;
 use winit::{
     event::*,
     event_loop::ActiveEventLoop,
@@ -8,8 +7,6 @@ use winit::application::ApplicationHandler;
 use winit::window::{WindowAttributes, WindowId};
 use crate::events::GjEvent;
 use crate::state::AppState;
-use crate::ui;
-use crate::ui::UiState;
 
 #[derive(Default)]
 pub struct App {
