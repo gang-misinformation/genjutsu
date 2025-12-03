@@ -1,14 +1,13 @@
-use egui::{Context, RichText, TextEdit, ComboBox, Color32};
+use egui::{Context, RichText, TextEdit, Color32};
 use gj_core::Model3D;
 use crate::events::{AppEvent, UiEvent};
 use crate::ui::UiEventSender;
 
 pub struct SidePanel {
-    // Model selection
+    // Model selection (currently only Shap-E)
     pub selected_model: Model3D,
 
-    // Render settings
-    pub show_grid: bool,
+    // Status
     pub last_status: Option<String>,
 
     // Prompt input
@@ -19,8 +18,7 @@ pub struct SidePanel {
 impl Default for SidePanel {
     fn default() -> Self {
         Self {
-            selected_model: Model3D::DreamScene360,
-            show_grid: false,
+            selected_model: Model3D::ShapE,
             last_status: None,
             prompt_text: String::new(),
             is_generating: false,
@@ -36,34 +34,12 @@ impl SidePanel {
                 ui.heading("Genjutsu");
                 ui.separator();
 
-                // === Model Selection ===
-                ui.heading(RichText::new("🎯 Generation Model").size(16.0));
+                // === Model Info ===
+                ui.heading(RichText::new("⚡ Shap-E").size(16.0));
                 ui.add_space(5.0);
 
-                ComboBox::from_label("Select Model")
-                    .selected_text(format!("{} {}",
-                                           self.selected_model.icon(),
-                                           self.selected_model.name()
-                    ))
-                    .show_ui(ui, |ui| {
-                        for model in Model3D::all() {
-                            let text = format!("{} {} - {}",
-                                               model.icon(),
-                                               model.name(),
-                                               model.description()
-                            );
-
-                            ui.selectable_value(
-                                &mut self.selected_model,
-                                model,
-                                text
-                            );
-                        }
-                    });
-
-                ui.add_space(3.0);
                 ui.label(
-                    RichText::new(self.selected_model.description())
+                    RichText::new("OpenAI's fast text-to-3D model (~30-60 seconds)")
                         .small()
                         .color(Color32::LIGHT_BLUE)
                 );
@@ -74,17 +50,10 @@ impl SidePanel {
                 ui.heading(RichText::new("✨ Text Prompt").size(16.0));
                 ui.add_space(5.0);
 
-                let prompt_hint = match self.selected_model {
-                    Model3D::DreamScene360 => "e.g., a medieval castle courtyard, a futuristic cityscape...",
-                    Model3D::GaussianDreamerPro => "e.g., a red sports car, a marble statue...",
-                    Model3D::TripoSR => "e.g., a coffee mug, a chair...",
-                    Model3D::SceneScape => "e.g., a living room with sofa and TV, a workshop...",
-                };
-
                 let text_edit = TextEdit::multiline(&mut self.prompt_text)
                     .desired_width(f32::INFINITY)
                     .desired_rows(3)
-                    .hint_text(prompt_hint);
+                    .hint_text("e.g., a red sports car, a medieval sword, a coffee mug...");
 
                 ui.add(text_edit);
 
@@ -93,7 +62,7 @@ impl SidePanel {
                 let generate_button = ui.add_enabled(
                     !self.is_generating && !self.prompt_text.trim().is_empty(),
                     egui::Button::new(
-                        RichText::new(format!("🎨 Generate with {}", self.selected_model.name()))
+                        RichText::new("🎨 Generate 3D Model")
                             .size(14.0)
                     )
                         .min_size(egui::vec2(ui.available_width(), 30.0))
@@ -109,43 +78,22 @@ impl SidePanel {
 
                 ui.add_space(5.0);
 
-                // Show placeholder warning
-                ui.label(
-                    RichText::new("⚠️ Models not installed yet - using placeholder generation")
-                        .small()
-                        .color(Color32::from_rgb(255, 200, 100))
-                );
-
                 ui.separator();
 
-                // === Example Prompts by Model ===
+                // === Example Prompts ===
                 ui.collapsing("💡 Example Prompts", |ui| {
-                    let examples = match self.selected_model {
-                        Model3D::DreamScene360 => vec![
-                            "a cozy forest clearing with campfire",
-                            "a cyberpunk street at night",
-                            "a medieval throne room",
-                            "a tropical beach with palm trees",
-                        ],
-                        Model3D::GaussianDreamerPro => vec![
-                            "a red sports car",
-                            "a blue crystal gem",
-                            "a wooden chair",
-                            "a golden trophy",
-                        ],
-                        Model3D::TripoSR => vec![
-                            "a coffee mug",
-                            "a house plant",
-                            "a toy robot",
-                            "a lamp",
-                        ],
-                        Model3D::SceneScape => vec![
-                            "a modern kitchen with island",
-                            "a home office with desk and bookshelf",
-                            "a bedroom with bed and nightstand",
-                            "a garage workshop with tools",
-                        ],
-                    };
+                    let examples = vec![
+                        "a red sports car",
+                        "a medieval sword",
+                        "a blue crystal gem",
+                        "a wooden chair",
+                        "a futuristic robot",
+                        "a coffee mug",
+                        "a potted plant",
+                        "a castle tower",
+                        "a treasure chest",
+                        "a flying drone",
+                    ];
 
                     for example in examples {
                         if ui.button(example).clicked() {
@@ -156,21 +104,19 @@ impl SidePanel {
 
                 ui.separator();
 
-                // === Alternative: Load from Files ===
-                ui.heading(RichText::new("📁 Or Load from Files").size(16.0));
-                ui.add_space(5.0);
+                // === Tips ===
+                ui.collapsing("💭 Prompt Tips", |ui| {
+                    ui.label("✓ Be specific but simple");
+                    ui.label("✓ Describe one object at a time");
+                    ui.label("✓ Include colors and materials");
+                    ui.label("✗ Avoid complex scenes");
+                    ui.label("✗ Don't use abstract concepts");
 
-                ui.label("Select 4 multi-view images:");
-
-                let load_button = ui.add_enabled(
-                    !self.is_generating,
-                    egui::Button::new("📂 Load Images...")
-                );
-
-                if load_button.clicked() {
-                    sender.instant(UiEvent::LoadImages);
-                    self.is_generating = true;
-                }
+                    ui.add_space(5.0);
+                    ui.label(RichText::new("Examples:").strong());
+                    ui.label("  Good: 'a red metal toolbox'");
+                    ui.label("  Bad: 'happiness and joy'");
+                });
 
                 ui.separator();
 
@@ -193,13 +139,23 @@ impl SidePanel {
                 ui.separator();
 
                 // === Camera Controls ===
-                ui.heading("Camera Controls");
+                ui.heading("🎮 Camera Controls");
                 ui.label("• Left drag: Rotate");
                 ui.label("• Mouse wheel: Zoom");
 
                 if ui.button("🔄 Reset Camera").clicked() {
                     sender.instant(UiEvent::ResetCamera);
                 }
+
+                ui.separator();
+
+                // === System Info ===
+                ui.collapsing("ℹ️ System Info", |ui| {
+                    ui.label("Model: Shap-E (OpenAI)");
+                    ui.label("Renderer: Gaussian Splatting");
+                    ui.label("Backend: WebGPU (wgpu)");
+                    ui.label("Generation: ~30-60 seconds");
+                });
             });
     }
 
@@ -208,12 +164,13 @@ impl SidePanel {
             AppEvent::Status(s) => {
                 self.last_status = Some(s.clone());
 
-                if s.contains("Generated") || s.contains("Error") || s.contains("Failed") || s.contains("ready") || s.contains("success") {
+                if s.contains("Generated") || s.contains("Error") || s.contains("Failed") ||
+                    s.contains("ready") || s.contains("success") || s.contains("Loaded") {
                     self.is_generating = false;
                 }
             }
             AppEvent::Progress(p) => {
-                self.last_status = Some(format!("Loading {:.0}%", p * 100.0));
+                self.last_status = Some(format!("Progress: {:.0}%", p * 100.0));
             }
             AppEvent::SceneReady => {
                 self.last_status = Some("Scene ready".into());

@@ -2,49 +2,53 @@
 set -e
 
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║        Local Setup - Multi-Model Service                 ║"
+echo "║        Genjutsu - Local Conda Setup                      ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
-# Create directories
-mkdir -p repositories outputs models
-
-# Install Python dependencies
-echo "Installing Python dependencies..."
-pip install -r requirements.txt
-
-# Clone GaussianDreamer
-echo ""
-echo "Cloning GaussianDreamer..."
-if [ ! -d "repositories/GaussianDreamer" ]; then
-    git clone https://github.com/hustvl/GaussianDreamer.git repositories/GaussianDreamer
-    cd repositories/GaussianDreamer
-    pip install -r requirements.txt
-    cd ../..
-else
-    echo "  ✓ Already exists"
+# Check if conda is installed
+if ! command -v conda &> /dev/null; then
+    echo "❌ Conda not found!"
+    echo "Please install Miniconda or Anaconda first:"
+    echo "  https://docs.conda.io/en/latest/miniconda.html"
+    exit 1
 fi
 
-# Clone DreamGaussian
+echo "✓ Conda found: $(conda --version)"
 echo ""
-echo "Cloning DreamGaussian..."
-if [ ! -d "repositories/dreamgaussian" ]; then
-    git clone https://github.com/dreamgaussian/dreamgaussian.git repositories/dreamgaussian
-    cd repositories/dreamgaussian
-    pip install -r requirements.txt
-    cd ../..
-else
-    echo "  ✓ Already exists"
+
+# Create conda environment
+echo "Creating conda environment 'genjutsu'..."
+if conda env list | grep -q "^genjutsu "; then
+    echo "Environment 'genjutsu' already exists."
+    read -p "Do you want to remove and recreate it? (y/N) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        conda env remove -n genjutsu -y
+    else
+        echo "Keeping existing environment. Run 'conda activate genjutsu' to use it."
+        exit 0
+    fi
 fi
+
+conda env create -f environment.yml
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║  ✓ Setup complete!                                       ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
-echo "Run the service:"
-echo "  python multi_model_service.py"
+echo "Next steps:"
+echo "  1. Activate environment:"
+echo "     conda activate genjutsu"
 echo ""
-echo "Test it:"
-echo "  curl http://localhost:5000/health"
+echo "  2. Start the Python service:"
+echo "     cd python"
+echo "     python multi_model_service.py"
+echo ""
+echo "  3. In another terminal, build and run the Rust app:"
+echo "     cargo run --release"
+echo ""
+echo "  4. Test the service:"
+echo "     curl http://localhost:5000/health"
 echo ""

@@ -34,10 +34,8 @@ impl LGMWorker {
                 match cmd_rx.recv() {
                     Ok(WorkerCommand::GenerateFromImages(images)) => {
                         let _ = resp_tx.send(WorkerResponse::Status("Processing images...".into()));
-
-                        // For now, show an error - we'll implement this later
                         let _ = resp_tx.send(WorkerResponse::Error(
-                            "Image-based generation not yet implemented in multi-model service".into()
+                            "Image-based generation not yet implemented with Shap-E. Use text prompts instead.".into()
                         ));
                     }
 
@@ -46,8 +44,8 @@ impl LGMWorker {
                             format!("Generating with {} from: '{}'", model.name(), prompt)
                         ));
 
-                        // Call the multi-model service
-                        match generate_with_model(&prompt, model) {
+                        // Call Shap-E service
+                        match generate_with_shap_e(&prompt, model) {
                             Ok(ply_path) => {
                                 let _ = resp_tx.send(WorkerResponse::Status("Loading generated Gaussians...".into()));
 
@@ -121,8 +119,8 @@ impl Drop for LGMWorker {
     }
 }
 
-/// Generate with specific model using the multi-model service
-fn generate_with_model(prompt: &str, model: Model3D) -> Result<std::path::PathBuf, String> {
+/// Generate with Shap-E using the Python service
+fn generate_with_shap_e(prompt: &str, model: Model3D) -> Result<std::path::PathBuf, String> {
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize)]
@@ -143,18 +141,19 @@ fn generate_with_model(prompt: &str, model: Model3D) -> Result<std::path::PathBu
     let client = reqwest::blocking::Client::new();
     let url = "http://127.0.0.1:5000/generate";
 
+    // Shap-E works best with these parameters
     let request_body = GenerateRequest {
         prompt: prompt.to_string(),
-        model: model.id().to_string(),
-        guidance_scale: 7.5,
-        num_inference_steps: 50,
+        model: "shap_e".to_string(),  // Always use Shap-E
+        guidance_scale: 15.0,  // Shap-E recommended value
+        num_inference_steps: 64,  // Default for quality/speed balance
     };
 
     let response = client
         .post(url)
         .json(&request_body)
         .send()
-        .map_err(|e| format!("Failed to connect to service: {}. Make sure Python service is running.", e))?;
+        .map_err(|e| format!("Failed to connect to service: {}. Make sure Python service is running (conda activate genjutsu && cd python && python multi_model_service.py)", e))?;
 
     if !response.status().is_success() {
         return Err(format!("Service returned error: {}", response.status()));

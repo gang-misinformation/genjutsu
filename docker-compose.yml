@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  multimodel:
+  genjutsu-service:
     build:
-      context: ./python
-      dockerfile: Dockerfile
-    container_name: multimodel-service
+      context: .
+      dockerfile: python/Dockerfile
+    container_name: genjutsu-service
     ports:
       - "5000:5000"
     volumes:
