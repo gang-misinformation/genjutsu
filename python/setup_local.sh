@@ -2,7 +2,7 @@
 set -e
 
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║        Genjutsu - Local Conda Setup                      ║"
+echo "║        Genjutsu - Local Setup (Conda)                   ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -26,12 +26,46 @@ if conda env list | grep -q "^genjutsu "; then
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         conda env remove -n genjutsu -y
     else
-        echo "Keeping existing environment. Run 'conda activate genjutsu' to use it."
+        echo "Keeping existing environment."
+        echo ""
+        echo "To activate: conda activate genjutsu"
+        echo "To update dependencies: conda activate genjutsu && pip install -r requirements.txt"
         exit 0
     fi
 fi
 
-conda env create -f environment.yml
+# Create environment with Python 3.12 and PyTorch
+echo "Creating environment with Python 3.12 and PyTorch (CUDA 12.4)..."
+conda create -n genjutsu python=3.12 -y
+
+# Activate environment
+eval "$(conda shell.bash hook)"
+conda activate genjutsu
+
+# Install PyTorch with CUDA 12.4
+echo ""
+echo "Installing PyTorch with CUDA 12.4..."
+pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
+
+# Install other dependencies
+echo ""
+echo "Installing other dependencies..."
+pip install -r requirements.txt
+
+# Clone and install Shap-E
+echo ""
+echo "Installing Shap-E..."
+if [ -d "shap-e" ]; then
+    echo "Shap-E directory already exists, skipping clone..."
+else
+    git clone https://github.com/openai/shap-e.git
+fi
+cd shap-e
+pip install -e .
+cd ..
+
+# Create outputs directory
+mkdir -p ../outputs
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"

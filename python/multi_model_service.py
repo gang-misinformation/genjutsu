@@ -10,8 +10,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 import torch
 
-from models.gaussiandreamer import GaussianDreamerModel
-from models.dreamgaussian import DreamGaussianModel
+from models.shap_e import ShapEModel
 
 
 app = Flask(__name__)
@@ -35,17 +34,11 @@ class MultiModelService:
         """Try to load all available models"""
         print("\nLoading models...")
 
-        # Try GaussianDreamer
-        print("1. GaussianDreamer:")
-        gd = GaussianDreamerModel(self.device)
-        if gd.load():
-            self.models['gaussiandreamer'] = gd
-
-        # Try DreamGaussian
-        print("\n2. DreamGaussian:")
-        dg = DreamGaussianModel(self.device)
-        if dg.load():
-            self.models['dreamgaussian'] = dg
+        # Try Shap-E
+        print("1. Shap-E:")
+        shap_e = ShapEModel(self.device)
+        if shap_e.load():
+            self.models['shap_e'] = shap_e
 
         # Summary
         print(f"\n✓ Loaded {len(self.models)} model(s): {list(self.models.keys())}")
@@ -59,7 +52,7 @@ class MultiModelService:
 
         Args:
             prompt: Text description
-            model_name: Which model to use (gaussiandreamer, dreamgaussian, etc.)
+            model_name: Which model to use (shap_e)
             **kwargs: Model-specific parameters
         """
         # Check model exists
@@ -134,15 +127,15 @@ def generate():
     POST body:
     {
         "prompt": "a red sports car",
-        "model": "gaussiandreamer",  # or "dreamgaussian"
-        "guidance_scale": 7.5,
-        "num_iterations": 3000
+        "model": "shap_e",
+        "guidance_scale": 15.0,
+        "num_inference_steps": 64
     }
     """
     data = request.json
 
     prompt = data.get('prompt')
-    model_name = data.get('model', 'gaussiandreamer')
+    model_name = data.get('model', 'shap_e')
 
     if not prompt:
         return jsonify({"error": "prompt is required"}), 400
@@ -150,9 +143,8 @@ def generate():
     try:
         # Extract model-specific params
         kwargs = {
-            'guidance_scale': data.get('guidance_scale', 7.5),
-            'num_iterations': data.get('num_iterations', 3000),
-            'num_steps': data.get('num_steps', 500),
+            'guidance_scale': data.get('guidance_scale', 15.0),
+            'num_inference_steps': data.get('num_inference_steps', 64),
         }
 
         # Generate
@@ -168,6 +160,8 @@ def generate():
     except ValueError as e:
         return jsonify({"status": "error", "error": str(e)}), 400
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
@@ -198,7 +192,7 @@ Endpoints:
 Loaded models: {list(service.models.keys())}
 """)
 
-    app.run(host=args.host, port=args.port, debug=False)
+    app.run(host=args.host, port=args.port, debug=False, threaded=True)
 
 
 if __name__ == '__main__':
