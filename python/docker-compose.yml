@@ -27,6 +27,8 @@ services:
     ports:
       - "5000:5000"
     volumes:
+      # CRITICAL: Mount project root outputs/ directory
+      # From python/ directory, ../outputs is the project root outputs/
       - ../outputs:/app/outputs
       - ./shared:/app/shared
       - ./models:/app/models
@@ -34,7 +36,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      # Return paths relative to project root
       - OUTPUT_DIR=/app/outputs
+      - OUTPUT_PATH_PREFIX=outputs
     depends_on:
       redis:
         condition: service_healthy
@@ -52,6 +56,8 @@ services:
       dockerfile: Dockerfile
     container_name: genjutsu-worker
     volumes:
+      # CRITICAL: Mount project root outputs/ directory
+      # From python/ directory, ../outputs is the project root outputs/
       - ../outputs:/app/outputs
       - ./shared:/app/shared
       - ./models:/app/models
@@ -60,6 +66,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - OUTPUT_DIR=/app/outputs
+      - OUTPUT_PATH_PREFIX=outputs
       - CUDA_VISIBLE_DEVICES=0
     depends_on:
       redis:

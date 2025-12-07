@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -5,6 +6,7 @@ use image::RgbaImage;
 use gj_core::gaussian_cloud::GaussianCloud;
 use gj_core::Model3D;
 use serde::{Deserialize, Serialize};
+use gj_core::error::Error;
 
 pub enum WorkerCommand {
     GenerateFromImages(Vec<RgbaImage>),
@@ -234,8 +236,26 @@ fn poll_job_status(job_id: &str, resp_tx: &Sender<WorkerResponse>) -> Result<(),
                         "Loading generated Gaussians...".into()
                     ));
 
+                    let output_path = &result.output_path;
+                    let host_path = if output_path.starts_with("/app/outputs/") {
+                        // Docker: /app/outputs/file.ply -> outputs/file.ply
+                        PathBuf::from(output_path.replace("/app/outputs/", "outputs/"))
+                    } else if output_path.starts_with("../outputs/") {
+                        // Local: ../outputs/file.ply -> outputs/file.ply
+                        PathBuf::from(output_path.replace("../outputs/", "outputs/"))
+                    } else if output_path.starts_with("outputs/") {
+                        // Already correct
+                        PathBuf::from(output_path.clone())
+                    } else {
+                        // Unknown format - try to extract just the filename
+                        let filename = std::path::Path::new(&output_path)
+                            .file_name()
+                            .ok_or_else(|| Error::InvalidConfig("Invalid output path".to_string())).unwrap();
+                        PathBuf::from("outputs").join(filename)
+                    };
+
                     // Load the PLY file
-                    match gj_core::gaussian_cloud::GaussianCloud::from_ply(&result.output_path) {
+                    match gj_core::gaussian_cloud::GaussianCloud::from_ply(&host_path) {
                         Ok(cloud) => {
                             let _ = resp_tx.send(WorkerResponse::Status(
                                 format!("Loaded {} Gaussians", cloud.count)
