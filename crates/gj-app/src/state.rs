@@ -1,13 +1,10 @@
 use std::sync::Arc;
-use burn_ndarray::NdArray;
-use burn_wgpu::Wgpu;
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::StoreOp;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
 use gj_core::gaussian_cloud::GaussianCloud;
-use gj_lgm::LGMPipeline;
 use gj_splat::camera::Camera;
 use gj_splat::renderer::GaussianRenderer;
 
