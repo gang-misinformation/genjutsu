@@ -17,12 +17,12 @@ pub struct Camera {
 impl Default for Camera {
     fn default() -> Self {
         Self {
-            position: Vec3::new(0.0, 0.0, 3.0),
+            position: Vec3::new(0.0, 0.0, 2.0),
             target: Vec3::ZERO,
             up: Vec3::Y,
-            distance: 3.0,
+            distance: 2.0,
             azimuth: 0.0,
-            elevation: 0.0,
+            elevation: 20.0,
             fov: 50.0,
             aspect_ratio: 16.0 / 9.0,
             near: 0.1,

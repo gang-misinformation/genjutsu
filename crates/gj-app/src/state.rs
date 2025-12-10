@@ -148,8 +148,7 @@ impl AppState {
         while let Some(response) = self.lgm_worker.try_recv_response() {
             match response {
                 WorkerResponse::Success(cloud) => {
-                    self.renderer.load_gaussians(&cloud);
-                    self.gaussian_cloud = Some(cloud);
+                    self.load_gaussian_cloud(cloud);
                     self.ui.push_app_event(AppEvent::SceneReady);
                 }
                 WorkerResponse::Error(err) => {
@@ -265,6 +264,27 @@ impl AppState {
                 _ => {}
             }
         }
+    }
+
+    pub fn load_gaussian_cloud(&mut self, cloud: GaussianCloud) {
+        // Compute bounds
+        let bounds = cloud.bounds();
+        let center = bounds.center();
+        let size = bounds.size();
+        let max_dim = size[0].max(size[1]).max(size[2]);
+
+        println!("Mesh bounds:");
+        println!("  Center: [{:.3}, {:.3}, {:.3}]", center[0], center[1], center[2]);
+        println!("  Size: [{:.3}, {:.3}, {:.3}]", size[0], size[1], size[2]);
+        println!("  Max dimension: {:.3}", max_dim);
+
+        // Auto-adjust camera distance based on mesh size
+        self.camera.distance = max_dim * 2.5;
+        self.camera.target = glam::Vec3::new(center[0], center[1], center[2]);
+        self.camera.update_position();
+
+        self.renderer.load_gaussians(&cloud);
+        self.gaussian_cloud = Some(cloud);
     }
 
     // --- 3D rendering + UI rendering ---------------------------------------

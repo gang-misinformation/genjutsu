@@ -37,16 +37,16 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // Project center
     let clip_pos = uniforms.view_proj * vec4<f32>(in.position, 1.0);
 
-    // Simple billboarding - use average scale for radius
+    // Use actual scale from data (much larger multiplier)
     let avg_scale = (in.scale.x + in.scale.y + in.scale.z) / 3.0;
-    let radius = avg_scale * 100.0; // Screen-space radius
+    let radius = avg_scale * 500.0; // Increased from 100.0 to 500.0
 
     // Create billboard quad
     let view_space_pos = uniforms.view * vec4<f32>(in.position, 1.0);
-    let distance_factor = -view_space_pos.z;
-    let screen_radius = radius / max(distance_factor, 0.1);
+    let distance_factor = max(-view_space_pos.z, 0.1);
+    let screen_radius = radius / distance_factor;
 
-    // Expand quad
+    // Expand quad (adjust for aspect ratio)
     let screen_offset = in.quad_pos * screen_radius * vec2<f32>(uniforms.viewport.y / uniforms.viewport.x, 1.0);
     let ndc_offset = screen_offset / uniforms.viewport * 2.0;
 
@@ -66,7 +66,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Simple circular gaussian falloff
+    // Softer gaussian falloff
     let dist = length(in.uv);
 
     // Discard outside circle
@@ -74,10 +74,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    // Gaussian falloff
-    let alpha = exp(-dist * dist * 2.0) * in.opacity;
+    // Softer falloff (reduced exponent for larger visible area)
+    let alpha = exp(-dist * dist * 1.0) * in.opacity;  // Changed from 2.0 to 1.0
 
-    if alpha < 0.01 {
+    if alpha < 0.005 {  // Lower threshold
         discard;
     }
 

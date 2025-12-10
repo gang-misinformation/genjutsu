@@ -231,25 +231,25 @@ impl GaussianRenderer {
     }
 
     pub fn load_gaussians(&mut self, cloud: &GaussianCloud) {
+        // Much more permissive filtering
         let instances: Vec<GaussianInstance> = (0..cloud.count)
             .filter(|&i| {
-                let opacity = cloud.opacity[i];
-                let scale_avg = (cloud.scales[i][0] + cloud.scales[i][1] + cloud.scales[i][2]) / 3.0;
-
-                // Keep more splats - only filter out garbage
-                opacity > 0.01 &&
-                    scale_avg > 0.0001 &&
-                    scale_avg < 10.0 &&
-                    cloud.positions[i][0].is_finite() &&
+                // Only filter out obviously bad data
+                cloud.positions[i][0].is_finite() &&
                     cloud.positions[i][1].is_finite() &&
-                    cloud.positions[i][2].is_finite()
+                    cloud.positions[i][2].is_finite() &&
+                    cloud.opacity[i] > 0.001  // Very low threshold
             })
             .map(|i| GaussianInstance {
                 position: cloud.positions[i],
                 _padding1: 0.0,
-                color: cloud.colors[i],  // USE ACTUAL COLORS
-                opacity: cloud.opacity[i],  // DON'T multiply by 0.4!
-                scale: cloud.scales[i],  // DON'T multiply by 0.5!
+                color: cloud.colors[i],
+                opacity: cloud.opacity[i] * 1.5,  // Boost opacity for visibility
+                scale: [
+                    cloud.scales[i][0] * 3.0,  // Scale up significantly
+                    cloud.scales[i][1] * 3.0,
+                    cloud.scales[i][2] * 3.0,
+                ],
                 _padding2: 0.0,
                 rotation: cloud.rotations[i],
             })
@@ -266,7 +266,7 @@ impl GaussianRenderer {
         self.num_gaussians = instances.len() as u32;
         self.last_view_proj = None;
 
-        println!("Rendered {} / {} gaussians ({:.1}% kept)",
+        println!("Loaded {} / {} gaussians ({:.1}% kept)",
                  instances.len(), cloud.count,
                  100.0 * instances.len() as f32 / cloud.count.max(1) as f32);
     }

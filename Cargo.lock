@@ -3353,6 +3353,7 @@ dependencies = [
  "env_logger",
  "gj-core",
  "gj-splat",
+ "glam 0.30.9",
  "image",
  "log",
  "pollster",

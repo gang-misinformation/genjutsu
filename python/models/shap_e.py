@@ -164,11 +164,14 @@ class ShapEModel(Model3DBase):
         distances, _ = tree.query(vertices, k=k)
         avg_distances = distances[:, 1:].mean(axis=1)
 
+        # Much larger scales for visibility
         scales = np.zeros((num_points, 3), dtype=np.float32)
-        scales[:, 0] = avg_distances * 0.5
-        scales[:, 1] = avg_distances * 0.5
-        scales[:, 2] = avg_distances * 0.4
-        scales = np.clip(scales, 0.005, 0.2)
+        scales[:, 0] = avg_distances * 1.5  # Increased from 0.5
+        scales[:, 1] = avg_distances * 1.5  # Increased from 0.5
+        scales[:, 2] = avg_distances * 1.2  # Increased from 0.4
+
+        # More permissive clamping
+        scales = np.clip(scales, 0.01, 1.0)  # Larger max
 
         print(f"    Scale range: [{scales.min():.4f}, {scales.max():.4f}]")
 
