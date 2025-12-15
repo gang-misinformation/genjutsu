@@ -5,10 +5,11 @@ mod state;
 mod ui;
 mod events;
 mod gfx;
-mod worker;
+mod generator;
+mod error;
 
 use std::error::Error;
-use winit::event_loop::{ControlFlow, EventLoop, EventLoopProxy};
+use winit::event_loop::{ControlFlow, EventLoop};
 use crate::events::GjEvent;
 
 fn main() -> Result<(), Box<dyn Error>> {

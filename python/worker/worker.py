@@ -4,7 +4,6 @@ Celery worker for 3D generation tasks
 import sys
 from pathlib import Path
 from datetime import datetime
-import torch
 
 # Add parent directory to path for shared module
 sys.path.insert(0, str(Path(__file__).parent))
@@ -12,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from shared.celery_app import celery_app
 from shared.config import OUTPUT_DIR, DEVICE
 from models.shap_e import ShapEModel
-
+from shared.schemas.jobs import *
 
 # Load models on worker startup
 print("=" * 60)
@@ -57,7 +56,7 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
     try:
         # Update state to STARTED
         self.update_state(
-            state='STARTED',
+            state=JobStatus.STARTED,
             meta={
                 'progress': 0.0,
                 'message': f'Starting {model_name} generation...'
@@ -87,10 +86,9 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
         print(f"Steps: {num_inference_steps}")
         print(f"{'='*60}\n")
 
-        # Progress callback
         def progress_callback(progress: float, message: str):
             self.update_state(
-                state='STARTED',
+                state=JobStatus.STARTED,
                 meta={
                     'progress': progress,
                     'message': message
@@ -123,15 +121,7 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
 
         progress_callback(1.0, 'Complete!')
 
-        # Return result
-        return {
-            'output_path': str(result_path),
-            'model': model_name,
-            'prompt': prompt,
-            'guidance_scale': guidance_scale,
-            'num_inference_steps': num_inference_steps
-        }
-
+        return GenerationResult(ply_path=str(result_path))
     except Exception as e:
         print(f"\n✗ Job failed: {str(e)}\n")
         raise

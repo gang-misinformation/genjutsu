@@ -1,11 +1,18 @@
-mod panels;
+mod top_panel;
+mod side_panel;
+mod central_panel;
+mod queue_panel;
+
+pub use top_panel::TopPanel;
+pub use side_panel::SidePanel;
+pub use central_panel::CentralPanel;
+pub use queue_panel::QueuePanel;
 
 use std::sync::Arc;
-use egui::{Context, FullOutput};
+use egui::Context;
 use winit::window::Window;
 use crate::events::{AppEvent, UiEvent};
 use crate::gfx::GfxState;
-use crate::ui::panels::Panels;
 
 pub struct UiState {
     pub(crate) egui_state: egui_winit::State,
@@ -17,7 +24,7 @@ pub struct UiState {
 
     app_event_tx: std::sync::mpsc::Sender<AppEvent>,
 
-    panels: Panels,
+    components: Vec<Box<dyn UiComponent>>,
 }
 
 impl UiState {
@@ -47,7 +54,7 @@ impl UiState {
             ui_outgoing: Vec::new(),
             app_incoming: Vec::new(),
             app_event_tx: tx,
-            panels: Panels::default(),
+            components: Vec::new(),
         }
     }
 
@@ -60,19 +67,15 @@ impl UiState {
         let mut sender = UiEventSender::default();
 
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
-            self.panels.draw(ctx, &mut sender);
+            self.components.iter_mut().map(|c| c.show(ctx, &mut sender));
         });
 
         let events = sender.take_events();
         (full_output, events)
     }
-
-    fn draw_panels(&mut self, ctx: &Context) {
-        let mut sender = UiEventSender::default();
-        self.panels.draw(ctx, &mut sender);
-
-        // merge events
-        self.ui_outgoing.extend(sender.take_events());
+    
+    pub fn add_component(&mut self, component: Box<dyn UiComponent>) {
+        self.components.push(component);
     }
 
     pub fn push_app_event(&mut self, ev: AppEvent) {
@@ -88,13 +91,13 @@ impl UiState {
     }
 
     /// internal: call after draw_ui to merge events and broadcast app_incoming to panels
-    pub fn after_draw_process(&mut self, full_output: egui::FullOutput, events_from_draw: Vec<UiEvent>) {
+    pub fn after_draw_process(&mut self, events_from_draw: Vec<UiEvent>) {
         // collect outgoing ui events
         self.ui_outgoing.extend(events_from_draw);
 
         // broadcast app events to all panels (so child components can react)
         for app_ev in self.app_incoming.drain(..) {
-            self.panels.on_app_event(&app_ev);
+            self.components.iter_mut().for_each(|c| c.on_app_event(&app_ev));
         }
 
         // handle platform output (clipboard, window title, etc.) is done by caller

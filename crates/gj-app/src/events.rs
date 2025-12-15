@@ -17,6 +17,9 @@ pub enum UiEvent {
     PromptChanged(String),
     ToggleWireframe(bool),
     Log(String),
+    LoadJobResult(String),
+    RemoveJob(String),    
+    ClearCompletedJobs,   
 }
 
 #[derive(Debug, Clone)]
@@ -28,5 +31,16 @@ pub enum AppEvent {
     Progress(f32),
     Log(String),
     WireframeState(bool),
-    SceneReady
+    SceneReady,
+    JobQueued(String),
+    JobProgress {     
+        job_id: String,
+        progress: f32,
+        message: String,
+    },
+    JobComplete(String),
+    JobFailed {         
+        job_id: String,
+        error: String,
+    },
 }

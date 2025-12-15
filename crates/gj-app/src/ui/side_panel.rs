@@ -4,15 +4,12 @@ use crate::events::{AppEvent, UiEvent};
 use crate::ui::UiEventSender;
 
 pub struct SidePanel {
-    // Model selection (currently only Shap-E)
     pub selected_model: Model3D,
-
-    // Status
     pub last_status: Option<String>,
-
-    // Prompt input
     pub prompt_text: String,
     pub is_generating: bool,
+    pub progress: f32,  // NEW: Track progress
+    pub active_jobs: usize,  // NEW: Track active job count
 }
 
 impl Default for SidePanel {
@@ -22,6 +19,8 @@ impl Default for SidePanel {
             last_status: None,
             prompt_text: String::new(),
             is_generating: false,
+            progress: 0f32,
+            active_jobs: 0,
         }
     }
 }
@@ -37,13 +36,11 @@ impl SidePanel {
                 // === Model Info ===
                 ui.heading(RichText::new("⚡ Shap-E").size(16.0));
                 ui.add_space(5.0);
-
                 ui.label(
                     RichText::new("OpenAI's fast text-to-3D model (~30-60 seconds)")
                         .small()
                         .color(Color32::LIGHT_BLUE)
                 );
-
                 ui.separator();
 
                 // === Prompt Input ===
@@ -56,13 +53,12 @@ impl SidePanel {
                     .hint_text("e.g., a red sports car, a medieval sword, a coffee mug...");
 
                 ui.add(text_edit);
-
                 ui.add_space(8.0);
 
                 let generate_button = ui.add_enabled(
-                    !self.is_generating && !self.prompt_text.trim().is_empty(),
+                    !self.prompt_text.trim().is_empty(),
                     egui::Button::new(
-                        RichText::new("🎨 Generate 3D Model")
+                        RichText::new("🎨 Add to Queue")
                             .size(14.0)
                     )
                         .min_size(egui::vec2(ui.available_width(), 30.0))
@@ -73,10 +69,47 @@ impl SidePanel {
                         prompt: self.prompt_text.clone(),
                         model: self.selected_model,
                     });
-                    self.is_generating = true;
+                    self.prompt_text.clear();  // Clear after adding to queue
                 }
 
                 ui.add_space(5.0);
+
+                // === Active Generation Status ===
+                if self.active_jobs > 0 {
+                    ui.separator();
+
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(30, 50, 80))
+                        .inner_margin(10.0)
+                        .rounding(5.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.heading("⚡ Generating...");
+                            });
+
+                            if let Some(ref msg) = self.last_status {
+                                ui.label(
+                                    RichText::new(msg)
+                                        .color(Color32::LIGHT_BLUE)
+                                );
+                            }
+
+                            ui.add(
+                                egui::ProgressBar::new(self.progress)
+                                    .show_percentage()
+                                    .animate(true)
+                            );
+
+                            if self.active_jobs > 1 {
+                                ui.label(
+                                    RichText::new(format!("+{} more in queue", self.active_jobs - 1))
+                                        .small()
+                                        .color(Color32::GRAY)
+                                );
+                            }
+                        });
+                }
 
                 ui.separator();
 
@@ -120,24 +153,6 @@ impl SidePanel {
 
                 ui.separator();
 
-                // === Status Display ===
-                if let Some(ref s) = self.last_status {
-                    let status_color = if s.contains("Error") || s.contains("Failed") {
-                        Color32::from_rgb(255, 100, 100)
-                    } else if s.contains("Generated") || s.contains("ready") || s.contains("success") {
-                        Color32::from_rgb(100, 255, 100)
-                    } else {
-                        Color32::LIGHT_BLUE
-                    };
-
-                    ui.label(
-                        RichText::new(format!("Status: {}", s))
-                            .color(status_color)
-                    );
-                }
-
-                ui.separator();
-
                 // === Camera Controls ===
                 ui.heading("🎮 Camera Controls");
                 ui.label("• Left drag: Rotate");
@@ -155,29 +170,26 @@ impl SidePanel {
                     ui.label("Renderer: Gaussian Splatting");
                     ui.label("Backend: WebGPU (wgpu)");
                     ui.label("Generation: ~30-60 seconds");
+                    ui.label(format!("Active jobs: {}", self.active_jobs));
                 });
             });
     }
 
     pub fn on_app_event(&mut self, ev: &AppEvent) {
         match ev {
-            AppEvent::Status(s) => {
-                self.last_status = Some(s.clone());
-
-                if s.contains("Generated") || s.contains("Error") || s.contains("Failed") ||
-                    s.contains("ready") || s.contains("success") || s.contains("Loaded") {
-                    self.is_generating = false;
+            AppEvent::JobQueued(_) => {
+                self.active_jobs += 1;
+            }
+            AppEvent::JobProgress { progress, message, .. } => {
+                self.progress = *progress;
+                self.last_status = Some(message.clone());
+            }
+            AppEvent::JobComplete(_) | AppEvent::JobFailed { .. } => {
+                self.active_jobs = self.active_jobs.saturating_sub(1);
+                if self.active_jobs == 0 {
+                    self.progress = 0.0;
+                    self.last_status = None;
                 }
-            }
-            AppEvent::Progress(p) => {
-                self.last_status = Some(format!("Progress: {:.0}%", p * 100.0));
-            }
-            AppEvent::SceneReady => {
-                self.last_status = Some("Scene ready".into());
-                self.is_generating = false;
-            }
-            AppEvent::GaussianCloudReady => {
-                self.is_generating = false;
             }
             _ => {}
         }

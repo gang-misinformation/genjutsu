@@ -9,10 +9,10 @@ use gj_splat::camera::Camera;
 use gj_splat::renderer::GaussianRenderer;
 
 use crate::events::{AppEvent, UiEvent};
+use crate::generator::{Generator, GeneratorResponse};
 use crate::gfx::GfxState;
-use crate::worker::{InferenceWorker, WorkerResponse};
+use crate::ui;
 use crate::ui::UiState;
-use crate::worker;
 
 pub struct AppState {
     pub(crate) window: Arc<Window>,
@@ -29,20 +29,27 @@ pub struct AppState {
     pub prompt: String,
     pub status: String,
 
-    pub lgm_worker: InferenceWorker,
-
     // Mouse state
     pub mouse_pressed: bool,
     pub last_mouse_pos: Option<(f32, f32)>,
 
     // Tokio runtime for background tasks
     pub rt: tokio::runtime::Runtime,
+    
+    generator: Generator
 }
 
 impl AppState {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
+        let generator = Generator::new().await?;
+
         let gfx = GfxState::new(window.clone()).await?;
-        let ui = UiState::new(&gfx, window.clone());
+        let mut ui_state = UiState::new(&gfx, window.clone());
+
+        ui_state.add_component(Box::new(ui::CentralPanel::default()));
+        ui_state.add_component(Box::new(ui::SidePanel::default()));
+        ui_state.add_component(Box::new(ui::TopPanel::default()));
+        ui_state.add_component(Box::new(ui::QueuePanel::new(generator.queue())));
 
         let renderer = GaussianRenderer::new(
             gfx.device.clone(),
@@ -53,8 +60,6 @@ impl AppState {
         let mut camera = Camera::default();
         let size = window.inner_size();
         camera.aspect_ratio = size.width as f32 / size.height as f32;
-        
-        let lgm_worker = InferenceWorker::new();
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)
@@ -65,7 +70,6 @@ impl AppState {
             window,
             renderer,
             camera,
-            lgm_worker,
             gfx,
             ui,
             gaussian_cloud: None,
@@ -77,6 +81,8 @@ impl AppState {
             last_mouse_pos: None,
 
             rt,
+
+            generator
         })
     }
 
@@ -89,16 +95,12 @@ impl AppState {
         }
     }
 
-    // --- Window resizing ----------------------------------------------------
-
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.gfx.resize(new_size);
             self.camera.aspect_ratio = new_size.width as f32 / new_size.height as f32;
         }
     }
-
-    // --- Mouse + keyboard input --------------------------------------------
 
     pub fn input(&mut self, event: &WindowEvent) -> bool {
         use winit::event::{ElementState, MouseScrollDelta};
@@ -141,29 +143,34 @@ impl AppState {
         }
     }
 
-    // --- Event processing from UI ------------------------------------------
-
     pub fn update(&mut self) {
-        // Check for responses from the LGM worker
-        while let Some(response) = self.lgm_worker.try_recv_response() {
+        while let Some(response) = self.generator.try_recv_response() {
             match response {
-                WorkerResponse::Success(cloud) => {
+                GeneratorResponse::JobSubmitted(job_id) => {
+                    self.ui.push_app_event(AppEvent::JobQueued(job_id));
+                }
+                GeneratorResponse::Progress(progress, message) => {
+                    self.ui.push_app_event(AppEvent::JobProgress(
+                        job_id,
+                        progress,
+                        message
+                    ));
+                }
+                GeneratorResponse::Success(cloud) => {
                     self.load_gaussian_cloud(cloud);
+                    self.ui.push_app_event(AppEvent::JobComplete(self.generator.current_job()));
                     self.ui.push_app_event(AppEvent::SceneReady);
                 }
-                WorkerResponse::Error(err) => {
-                    self.status = format!("Error: {}", err);
-                    self.ui.push_app_event(AppEvent::Status(self.status.clone()));
-                    self.ui.push_app_event(AppEvent::Log(format!("Pipeline error: {}", err)));
+                GeneratorResponse::Error(err) => {
+                    self.ui.push_app_event(AppEvent::JobFailed {
+                        job_id,
+                        error: err,
+                    });
                 }
-                WorkerResponse::Progress(p, ..) => {
-                    self.ui.push_app_event(AppEvent::Progress(p));
-                }
-                WorkerResponse::Status(s) => {
+                GeneratorResponse::Status(s) => {
                     self.status = s.clone();
                     self.ui.push_app_event(AppEvent::Status(s));
-                },
-                WorkerResponse::JobSubmitted(jobId) => self.ui.push_app_event(AppEvent::Status(jobId))
+                }
             }
         }
 
@@ -184,27 +191,40 @@ impl AppState {
                 }
 
                 UiEvent::GenerateWithModel { prompt, model } => {
+                    let job_id = self.queue.add_job(prompt.clone(), model);
+
                     let worker_tx = self.lgm_worker.command_tx.clone();
                     let ui_tx = self.ui.app_event_sender_clone();
                     let window = self.window.clone();
-                    let prompt_clone = prompt.clone();
-
-                    self.prompt = prompt;
+                    self.prompt = prompt.clone();
 
                     self.rt.spawn_blocking(move || {
-                        let _ = ui_tx.send(AppEvent::Status(
-                            format!("Generating with {:?}...", model)
-                        ));
-
                         if let Err(e) = worker_tx.send(worker::WorkerCommand::GenerateFromPrompt {
-                            prompt: prompt_clone,
-                            model: model.into() // Convert UI model to worker model
+                            prompt,
+                            model,
                         }) {
                             let _ = ui_tx.send(AppEvent::Status(format!("Worker error: {}", e)));
                         }
-
                         window.request_redraw();
                     });
+                }
+
+                UiEvent::LoadJobResult(job_id) => {
+                    if let Some(job) = self.queue.get_job(&job_id) {
+                        if let Some(ref cloud) = job.result {
+                            self.load_gaussian_cloud(cloud.clone());
+                            self.current_scene_job_id = Some(job_id);
+                            self.ui.push_app_event(AppEvent::SceneReady);
+                        }
+                    }
+                }
+
+                UiEvent::RemoveJob(job_id) => {
+                    self.queue.remove_job(&job_id);
+                }
+
+                UiEvent::ClearCompletedJobs => {
+                    self.queue.clear_completed();
                 }
 
                 UiEvent::PromptChanged(new_prompt) => {
@@ -331,7 +351,8 @@ impl AppState {
 
         // --- UI -------------------------------------------------------------
 
-        let (full_output, ui_events) = self.ui.draw(&self.window);
+        let jobs: Vec<_> = self.queue.jobs().collect();
+        let (full_output, ui_events) = self.ui.draw(&self.window, &jobs);
 
         let platform_output = full_output.platform_output.clone();
         self.ui.egui_state.handle_platform_output(&self.window, platform_output);
