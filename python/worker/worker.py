@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
+import requests
+
 # Add parent directory to path for shared module
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -37,6 +39,19 @@ print(f"Loaded {len(MODELS)} model(s)")
 print("=" * 60)
 print()
 
+def update_job_status(job_id: str, progress: float, message: str):
+    """Notify Rust app of job progress"""
+    try:
+        requests.post(
+            f"http://host.docker.internal:3000/job/{job_id}/progress",
+            json={
+                "progress": progress,
+                "message": message,
+            },
+            timeout=1
+        )
+    except Exception as e:
+        print(f"Failed to update job status: {e}")
 
 @celery_app.task(name='worker.generate_3d', bind=True)
 def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_inference_steps: int):
@@ -54,14 +69,7 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
         dict with output_path and metadata
     """
     try:
-        # Update state to STARTED
-        self.update_state(
-            state=JobStatus.STARTED,
-            meta={
-                'progress': 0.0,
-                'message': f'Starting {model_name} generation...'
-            }
-        )
+        job_id = self.request.id
 
         # Check model exists
         if model_name not in MODELS:
@@ -87,13 +95,10 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
         print(f"{'='*60}\n")
 
         def progress_callback(progress: float, message: str):
-            self.update_state(
-                state=JobStatus.STARTED,
-                meta={
-                    'progress': progress,
-                    'message': message
-                }
-            )
+            job_id = self.request.id
+
+            # Update via HTTP instead of just Celery meta
+            update_job_status(job_id, progress, message)
             print(f"[{progress*100:.0f}%] {message}")
 
         # Update progress

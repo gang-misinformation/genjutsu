@@ -11,8 +11,23 @@ pub use queue_panel::QueuePanel;
 use std::sync::Arc;
 use egui::Context;
 use winit::window::Window;
+use crate::db::job::JobRecord;
 use crate::events::{AppEvent, UiEvent};
 use crate::gfx::GfxState;
+
+pub struct UiContext {
+    pub jobs: Vec<JobRecord>,
+    pub current_job_id: Option<String>,
+}
+
+impl UiContext {
+    pub fn new() -> Self {
+        Self {
+            jobs: Vec::new(),
+            current_job_id: None,
+        }
+    }
+}
 
 pub struct UiState {
     pub(crate) egui_state: egui_winit::State,
@@ -25,6 +40,7 @@ pub struct UiState {
     app_event_tx: std::sync::mpsc::Sender<AppEvent>,
 
     components: Vec<Box<dyn UiComponent>>,
+    ui_ctx: UiContext,
 }
 
 impl UiState {
@@ -55,6 +71,7 @@ impl UiState {
             app_incoming: Vec::new(),
             app_event_tx: tx,
             components: Vec::new(),
+            ui_ctx: UiContext::new(),
         }
     }
 
@@ -67,7 +84,7 @@ impl UiState {
         let mut sender = UiEventSender::default();
 
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
-            self.components.iter_mut().map(|c| c.show(ctx, &mut sender));
+            self.components.iter_mut().map(|c| c.show(ctx, &mut sender, &self.ui_ctx));
         });
 
         let events = sender.take_events();
@@ -119,7 +136,7 @@ impl UiEventSender {
 }
 
 pub trait UiComponent {
-    fn show(&mut self, ctx: &Context, sender: &mut UiEventSender);
+    fn show(&mut self, ctx: &Context, sender: &mut UiEventSender, ui_ctx: &UiContext);
 
     fn on_app_event(&mut self, _ev: &AppEvent) {}
 }

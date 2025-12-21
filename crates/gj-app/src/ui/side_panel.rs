@@ -1,7 +1,7 @@
 use egui::{Context, RichText, TextEdit, Color32};
 use gj_core::Model3D;
 use crate::events::{AppEvent, UiEvent};
-use crate::ui::UiEventSender;
+use crate::ui::{UiComponent, UiContext, UiEventSender};
 
 pub struct SidePanel {
     pub selected_model: Model3D,
@@ -25,8 +25,8 @@ impl Default for SidePanel {
     }
 }
 
-impl SidePanel {
-    pub fn show(&mut self, ctx: &Context, sender: &mut UiEventSender) {
+impl UiComponent for SidePanel {
+    fn show(&mut self, ctx: &Context, sender: &mut UiEventSender, ui_ctx: &UiContext) {
         egui::SidePanel::left("side_panel")
             .default_width(340.0)
             .show(ctx, |ui| {
@@ -175,7 +175,7 @@ impl SidePanel {
             });
     }
 
-    pub fn on_app_event(&mut self, ev: &AppEvent) {
+    fn on_app_event(&mut self, ev: &AppEvent) {
         match ev {
             AppEvent::JobQueued(_) => {
                 self.active_jobs += 1;

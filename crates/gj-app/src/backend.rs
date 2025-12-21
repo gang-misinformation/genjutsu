@@ -6,36 +6,29 @@ mod schemas;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use crate::error::AppError;
-use crate::generator::backend::config::GenBackendConfig;
-use crate::generator::backend::routes::api_routes;
-use crate::generator::backend::state::GenState;
+use crate::backend::config::GenBackendConfig;
+use crate::backend::routes::api_routes;
+use crate::backend::state::GenState;
 use crate::generator::{GeneratorCommand, GeneratorResponse};
-use crate::generator::backend::schemas::{GenerationJob, JobResponse, JobStatusResponse};
-
-#[derive(Deserialize)]
-struct JobResult {
-    output_path: String,
-    model: String,
-    prompt: String,
-}
+use crate::backend::schemas::{GenerationJob, JobResponse, JobStatusPair, JobStatusResponse};
 
 pub struct GenBackend {
     config: GenBackendConfig,
-    status_rx: Receiver<JobStatusResponse>,
+    status_rx: Receiver<JobStatusPair>,
 }
 
 impl GenBackend {
     pub async fn new() -> anyhow::Result<Self> {
         let conf = GenBackendConfig::load()?;
 
-        let state = GenState::new();
-        let status_rx = state.status_rx();
+        let (status_tx, status_rx) = channel::<JobStatusPair>();
+        let state = GenState::new(status_tx);
 
         let app = Router::new()
             .merge(api_routes())
@@ -67,18 +60,15 @@ impl GenBackend {
         let response = client
             .post(url)
             .json(&request_body)
-            .send()
-            .map_err(|e| format!("Failed to connect: {}. Make sure FastAPI service is running (cd python && docker-compose up)", e))?;
+            .send()?;
 
         if !response.status().is_success() {
             return Err(anyhow::Error::from(AppError::BackendError(String::from(response.status().as_str()))));
         }
 
         let result: JobResponse = response
-            .json()
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
+            .json()?;
 
         Ok(())
     }
-
 }

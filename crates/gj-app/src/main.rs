@@ -7,6 +7,9 @@ mod events;
 mod gfx;
 mod generator;
 mod error;
+mod db;
+mod backend;
+mod job;
 
 use std::error::Error;
 use winit::event_loop::{ControlFlow, EventLoop};

@@ -1,4 +1,5 @@
 use gj_core::Model3D;
+use crate::db::job::JobRecord;
 
 #[derive(Debug, Clone)]
 pub enum GjEvent {
@@ -32,7 +33,7 @@ pub enum AppEvent {
     Log(String),
     WireframeState(bool),
     SceneReady,
-    JobQueued(String),
+    JobQueued(JobRecord),
     JobProgress {     
         job_id: String,
         progress: f32,

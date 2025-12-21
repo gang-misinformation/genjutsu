@@ -7,10 +7,13 @@ use winit::window::Window;
 use gj_core::gaussian_cloud::GaussianCloud;
 use gj_splat::camera::Camera;
 use gj_splat::renderer::GaussianRenderer;
-
+use crate::backend::GenBackend;
+use crate::db::job::JobRecord;
+use crate::db::JobDatabase;
 use crate::events::{AppEvent, UiEvent};
 use crate::generator::{Generator, GeneratorResponse};
 use crate::gfx::GfxState;
+use crate::job::JobStatus;
 use crate::ui;
 use crate::ui::UiState;
 
@@ -36,12 +39,16 @@ pub struct AppState {
     // Tokio runtime for background tasks
     pub rt: tokio::runtime::Runtime,
     
-    generator: Generator
+    generator: Generator,
+    backend: GenBackend,
+    pub(crate) db: JobDatabase,
+    job_cache: Vec<JobRecord>
 }
 
 impl AppState {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let generator = Generator::new().await?;
+        let backend = GenBackend::new().await?;
 
         let gfx = GfxState::new(window.clone()).await?;
         let mut ui_state = UiState::new(&gfx, window.clone());
@@ -49,7 +56,7 @@ impl AppState {
         ui_state.add_component(Box::new(ui::CentralPanel::default()));
         ui_state.add_component(Box::new(ui::SidePanel::default()));
         ui_state.add_component(Box::new(ui::TopPanel::default()));
-        ui_state.add_component(Box::new(ui::QueuePanel::new(generator.queue())));
+        ui_state.add_component(Box::new(ui::QueuePanel::default()));
 
         let renderer = GaussianRenderer::new(
             gfx.device.clone(),
@@ -66,23 +73,25 @@ impl AppState {
             .enable_all()
             .build()?;
 
+        let db_path = std::env::current_dir()?.join("outputs/db");
+        let db = JobDatabase::new(db_path).await?;
+
         Ok(Self {
             window,
             renderer,
             camera,
             gfx,
-            ui,
+            ui: ui_state,
             gaussian_cloud: None,
-
             prompt: String::new(),
             status: "Ready".into(),
-
             mouse_pressed: false,
             last_mouse_pos: None,
-
             rt,
-
-            generator
+            generator,
+            backend,
+            db,
+            job_cache: vec![],
         })
     }
 
@@ -146,15 +155,15 @@ impl AppState {
     pub fn update(&mut self) {
         while let Some(response) = self.generator.try_recv_response() {
             match response {
-                GeneratorResponse::JobSubmitted(job_id) => {
-                    self.ui.push_app_event(AppEvent::JobQueued(job_id));
+                GeneratorResponse::JobSubmitted(job) => {
+                    self.ui.push_app_event(AppEvent::JobQueued(job));
                 }
-                GeneratorResponse::Progress(progress, message) => {
-                    self.ui.push_app_event(AppEvent::JobProgress(
+                GeneratorResponse::Progress(job_id, progress, message) => {
+                    self.ui.push_app_event(AppEvent::JobProgress {
                         job_id,
                         progress,
                         message
-                    ));
+                    });
                 }
                 GeneratorResponse::Success(cloud) => {
                     self.load_gaussian_cloud(cloud);
@@ -284,6 +293,10 @@ impl AppState {
                 _ => {}
             }
         }
+
+        if let Ok(jobs) = self.rt.block_on(self.db.get_all_jobs()) {
+            self.job_cache = jobs;
+        }
     }
 
     pub fn load_gaussian_cloud(&mut self, cloud: GaussianCloud) {
@@ -407,8 +420,32 @@ impl AppState {
         output.present();
 
         // Merge UI events + broadcast to panels (child components)
-        self.ui.after_draw_process(full_output, ui_events);
+        self.ui.after_draw_process(ui_events);
 
         Ok(())
+    }
+
+    pub async fn create_job(&self, prompt: String, model: gj_core::Model3D) -> anyhow::Result<String> {
+        let job_id = uuid::Uuid::new_v4().to_string();
+
+        let job = JobRecord {
+            id: None,
+            job_id: job_id.clone(),
+            prompt,
+            model: model.id().to_string(),
+            status: JobStatus::Queued,
+            guidance_scale: 15.0,
+            num_inference_steps: 64,
+            created_at: DateTime::<Utc>::new(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            progress: 0.0,
+            message: Some("Job queued".to_string()),
+            ply_path: None,
+            error: None,
+        };
+
+        self.db.insert_job(job).await?;
+
+        Ok(job_id)
     }
 }
