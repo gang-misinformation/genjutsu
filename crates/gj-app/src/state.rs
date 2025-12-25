@@ -3,22 +3,23 @@ use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::StoreOp;
 use winit::event::WindowEvent;
 use winit::window::Window;
-
+use chrono::Utc;
+use surrealdb::types::Datetime as SurrealDatetime;
+use winit::event_loop::EventLoopProxy;
 use gj_core::gaussian_cloud::GaussianCloud;
 use gj_splat::camera::Camera;
 use gj_splat::renderer::GaussianRenderer;
-use crate::backend::GenBackend;
-use crate::db::job::JobRecord;
-use crate::db::JobDatabase;
-use crate::events::{AppEvent, UiEvent};
-use crate::generator::{Generator, GeneratorResponse};
+use crate::generator::db::job::JobRecord;
+use crate::events::{AppEvent, GjEvent};
+use crate::generator::Generator;
 use crate::gfx::GfxState;
 use crate::job::JobStatus;
 use crate::ui;
-use crate::ui::UiState;
+use crate::ui::{UiEvent, UiState};
 
 pub struct AppState {
     pub(crate) window: Arc<Window>,
+    event_loop_proxy: Arc<EventLoopProxy<GjEvent>>,
 
     pub gfx: GfxState,
     pub ui: UiState,
@@ -36,22 +37,15 @@ pub struct AppState {
     pub mouse_pressed: bool,
     pub last_mouse_pos: Option<(f32, f32)>,
 
-    // Tokio runtime for background tasks
-    pub rt: tokio::runtime::Runtime,
-    
-    generator: Generator,
-    backend: GenBackend,
-    pub(crate) db: JobDatabase,
-    job_cache: Vec<JobRecord>
+    pub(crate) generator: Generator,
 }
 
 impl AppState {
-    pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
-        let generator = Generator::new().await?;
-        let backend = GenBackend::new().await?;
+    pub async fn new(window: Arc<Window>, event_loop_proxy: Arc<EventLoopProxy<GjEvent>>) -> anyhow::Result<Self> {
+        let generator = Generator::new(event_loop_proxy.clone()).await?;
 
         let gfx = GfxState::new(window.clone()).await?;
-        let mut ui_state = UiState::new(&gfx, window.clone());
+        let mut ui_state = UiState::new(&gfx, window.clone(), event_loop_proxy.clone());
 
         ui_state.add_component(Box::new(ui::CentralPanel::default()));
         ui_state.add_component(Box::new(ui::SidePanel::default()));
@@ -68,16 +62,9 @@ impl AppState {
         let size = window.inner_size();
         camera.aspect_ratio = size.width as f32 / size.height as f32;
 
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4)
-            .enable_all()
-            .build()?;
-
-        let db_path = std::env::current_dir()?.join("outputs/db");
-        let db = JobDatabase::new(db_path).await?;
-
         Ok(Self {
             window,
+            event_loop_proxy,
             renderer,
             camera,
             gfx,
@@ -87,21 +74,12 @@ impl AppState {
             status: "Ready".into(),
             mouse_pressed: false,
             last_mouse_pos: None,
-            rt,
-            generator,
-            backend,
-            db,
-            job_cache: vec![],
+            generator
         })
     }
 
-    pub fn init(&mut self) {
-        // Seed UI with initial state
-        self.ui.push_app_event(AppEvent::Status(self.status.clone()));
-
-        if self.gaussian_cloud.is_some() {
-            self.ui.push_app_event(AppEvent::SceneReady);
-        }
+    pub fn push_event(&self, event: AppEvent) {
+        self.event_loop_proxy.send_event(GjEvent::App(event)).unwrap();
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -109,6 +87,12 @@ impl AppState {
             self.gfx.resize(new_size);
             self.camera.aspect_ratio = new_size.width as f32 / new_size.height as f32;
         }
+    }
+
+    pub fn reset_camera(&mut self) {
+        self.camera = Camera::default();
+        let size = self.window.inner_size();
+        self.camera.aspect_ratio = size.width as f32 / size.height as f32;
     }
 
     pub fn input(&mut self, event: &WindowEvent) -> bool {
@@ -152,153 +136,6 @@ impl AppState {
         }
     }
 
-    pub fn update(&mut self) {
-        while let Some(response) = self.generator.try_recv_response() {
-            match response {
-                GeneratorResponse::JobSubmitted(job) => {
-                    self.ui.push_app_event(AppEvent::JobQueued(job));
-                }
-                GeneratorResponse::Progress(job_id, progress, message) => {
-                    self.ui.push_app_event(AppEvent::JobProgress {
-                        job_id,
-                        progress,
-                        message
-                    });
-                }
-                GeneratorResponse::Success(cloud) => {
-                    self.load_gaussian_cloud(cloud);
-                    self.ui.push_app_event(AppEvent::JobComplete(self.generator.current_job()));
-                    self.ui.push_app_event(AppEvent::SceneReady);
-                }
-                GeneratorResponse::Error(err) => {
-                    self.ui.push_app_event(AppEvent::JobFailed {
-                        job_id,
-                        error: err,
-                    });
-                }
-                GeneratorResponse::Status(s) => {
-                    self.status = s.clone();
-                    self.ui.push_app_event(AppEvent::Status(s));
-                }
-            }
-        }
-
-        let ui_events = self.ui.take_ui_events();
-
-        for ev in ui_events {
-            match ev {
-                UiEvent::ResetCamera => {
-                    self.camera = Camera::default();
-                    let size = self.window.inner_size();
-                    self.camera.aspect_ratio = size.width as f32 / size.height as f32;
-
-                    self.ui.push_app_event(AppEvent::Status("Camera reset".into()));
-                }
-
-                UiEvent::ToggleWireframe(enabled) => {
-                    self.ui.push_app_event(AppEvent::WireframeState(enabled));
-                }
-
-                UiEvent::GenerateWithModel { prompt, model } => {
-                    let job_id = self.queue.add_job(prompt.clone(), model);
-
-                    let worker_tx = self.lgm_worker.command_tx.clone();
-                    let ui_tx = self.ui.app_event_sender_clone();
-                    let window = self.window.clone();
-                    self.prompt = prompt.clone();
-
-                    self.rt.spawn_blocking(move || {
-                        if let Err(e) = worker_tx.send(worker::WorkerCommand::GenerateFromPrompt {
-                            prompt,
-                            model,
-                        }) {
-                            let _ = ui_tx.send(AppEvent::Status(format!("Worker error: {}", e)));
-                        }
-                        window.request_redraw();
-                    });
-                }
-
-                UiEvent::LoadJobResult(job_id) => {
-                    if let Some(job) = self.queue.get_job(&job_id) {
-                        if let Some(ref cloud) = job.result {
-                            self.load_gaussian_cloud(cloud.clone());
-                            self.current_scene_job_id = Some(job_id);
-                            self.ui.push_app_event(AppEvent::SceneReady);
-                        }
-                    }
-                }
-
-                UiEvent::RemoveJob(job_id) => {
-                    self.queue.remove_job(&job_id);
-                }
-
-                UiEvent::ClearCompletedJobs => {
-                    self.queue.clear_completed();
-                }
-
-                UiEvent::PromptChanged(new_prompt) => {
-                    self.prompt = new_prompt;
-                }
-
-                UiEvent::LoadImages => {
-                    let window = self.window.clone();
-                    let worker_tx = self.lgm_worker.command_tx.clone();
-                    let ui_tx = self.ui.app_event_sender_clone();
-
-                    // Spawn file picker on blocking thread pool
-                    self.rt.spawn_blocking(move || {
-                        let _ = ui_tx.send(AppEvent::Status("Opening file dialog...".into()));
-
-                        if let Some(files) = rfd::FileDialog::new()
-                            .add_filter("Images", &["png", "jpg", "jpeg"])
-                            .pick_files()
-                        {
-                            let _ = ui_tx.send(AppEvent::Status("Loading images...".into()));
-
-                            // Load images on this thread
-                            let images: Result<Vec<_>, _> = files.iter()
-                                .enumerate()
-                                .map(|(i, path)| {
-                                    let progress = (i as f32) / (files.len() as f32);
-                                    let _ = ui_tx.send(AppEvent::Progress(progress));
-                                    image::open(path).map(|img| img.to_rgba8())
-                                })
-                                .collect();
-
-                            match images {
-                                Ok(images) => {
-                                    let _ = ui_tx.send(AppEvent::Status("Generating 3D model...".into()));
-
-                                    // Send images to worker for processing
-                                    if let Err(e) = worker_tx.send(crate::worker::WorkerCommand::GenerateFromImages(images)) {
-                                        let _ = ui_tx.send(AppEvent::Status(format!("Worker error: {}", e)));
-                                    }
-                                }
-                                Err(e) => {
-                                    let _ = ui_tx.send(AppEvent::Status(format!("Failed to load images: {}", e)));
-                                    let _ = ui_tx.send(AppEvent::Log(format!("Image load error: {}", e)));
-                                }
-                            }
-                        } else {
-                            let _ = ui_tx.send(AppEvent::Status("File selection cancelled".into()));
-                        }
-
-                        window.request_redraw();
-                    });
-                }
-
-                UiEvent::Log(msg) => {
-                    self.ui.push_app_event(AppEvent::Log(format!("UI: {}", msg)));
-                }
-                _ => {}
-            }
-        }
-
-        if let Ok(jobs) = self.rt.block_on(self.db.get_all_jobs()) {
-            self.job_cache = jobs;
-        }
-    }
-
     pub fn load_gaussian_cloud(&mut self, cloud: GaussianCloud) {
         // Compute bounds
         let bounds = cloud.bounds();
@@ -320,8 +157,6 @@ impl AppState {
         self.gaussian_cloud = Some(cloud);
     }
 
-    // --- 3D rendering + UI rendering ---------------------------------------
-
     pub fn render(&mut self) -> anyhow::Result<()> {
         let size = self.window.inner_size();
         if size.width == 0 || size.height == 0 {
@@ -334,9 +169,8 @@ impl AppState {
             label: Some("Render Encoder")
         });
 
-        // --- 3D scene -------------------------------------------------------
-
-        if let Some(ref cloud) = self.gaussian_cloud {
+        // 3D scene
+        if let Some(ref _cloud) = self.gaussian_cloud {
             let size = self.window.inner_size();
             self.renderer.render(
                 &mut encoder,
@@ -362,10 +196,8 @@ impl AppState {
             });
         }
 
-        // --- UI -------------------------------------------------------------
-
-        let jobs: Vec<_> = self.queue.jobs().collect();
-        let (full_output, ui_events) = self.ui.draw(&self.window, &jobs);
+        // UI
+        let full_output = self.ui.draw(&self.window);
 
         let platform_output = full_output.platform_output.clone();
         self.ui.egui_state.handle_platform_output(&self.window, platform_output);
@@ -392,7 +224,6 @@ impl AppState {
             &screen_desc,
         );
 
-        // draw UI pass
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("egui pass"),
@@ -419,33 +250,29 @@ impl AppState {
         self.gfx.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
-        // Merge UI events + broadcast to panels (child components)
-        self.ui.after_draw_process(ui_events);
-
         Ok(())
     }
 
-    pub async fn create_job(&self, prompt: String, model: gj_core::Model3D) -> anyhow::Result<String> {
-        let job_id = uuid::Uuid::new_v4().to_string();
-
-        let job = JobRecord {
-            id: None,
-            job_id: job_id.clone(),
-            prompt,
-            model: model.id().to_string(),
-            status: JobStatus::Queued,
-            guidance_scale: 15.0,
-            num_inference_steps: 64,
-            created_at: DateTime::<Utc>::new(),
-            updated_at: chrono::Utc::now().to_rfc3339(),
-            progress: 0.0,
-            message: Some("Job queued".to_string()),
-            ply_path: None,
-            error: None,
-        };
-
-        self.db.insert_job(job).await?;
-
-        Ok(job_id)
+    pub fn on_ui_event(&mut self, event: UiEvent) {
+        pollster::block_on(
+            async {
+                match event {
+                    UiEvent::GenerateWithModel { prompt, model } => {
+                        self.generator.submit_job(prompt, model).await?;
+                        let jobs = self.generator.get_jobs().await?;
+                        self.ui.set_jobs(jobs);
+                    }
+                    UiEvent::ResetCamera => {
+                        self.reset_camera();
+                        self.push_event(AppEvent::Status("Camera reset".into()));
+                    }
+                    UiEvent::RemoveJob(id) => {
+                        self.generator.remove_job(id).await?;
+                    },
+                    _ => {}
+                }
+                anyhow::Ok(())
+            }
+        ).unwrap();
     }
 }

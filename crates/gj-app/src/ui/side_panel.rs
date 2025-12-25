@@ -1,15 +1,19 @@
+use std::sync::Arc;
+use async_trait::async_trait;
+use chrono::Utc;
 use egui::{Context, RichText, TextEdit, Color32};
 use gj_core::Model3D;
-use crate::events::{AppEvent, UiEvent};
-use crate::ui::{UiComponent, UiContext, UiEventSender};
+use gj_splat::camera::Camera;
+use crate::events::{AppEvent, GjEvent};
+use crate::ui::{UiComponent, UiContext, UiEvent};
 
 pub struct SidePanel {
     pub selected_model: Model3D,
     pub last_status: Option<String>,
     pub prompt_text: String,
     pub is_generating: bool,
-    pub progress: f32,  // NEW: Track progress
-    pub active_jobs: usize,  // NEW: Track active job count
+    pub progress: f32,
+    pub active_jobs: usize,
 }
 
 impl Default for SidePanel {
@@ -25,8 +29,9 @@ impl Default for SidePanel {
     }
 }
 
+#[async_trait]
 impl UiComponent for SidePanel {
-    fn show(&mut self, ctx: &Context, sender: &mut UiEventSender, ui_ctx: &UiContext) {
+    fn show(&mut self, ctx: &Context, ui_ctx: &UiContext) {
         egui::SidePanel::left("side_panel")
             .default_width(340.0)
             .show(ctx, |ui| {
@@ -65,7 +70,7 @@ impl UiComponent for SidePanel {
                 );
 
                 if generate_button.clicked() {
-                    sender.instant(UiEvent::GenerateWithModel {
+                    ui_ctx.send_event(UiEvent::GenerateWithModel {
                         prompt: self.prompt_text.clone(),
                         model: self.selected_model,
                     });
@@ -74,7 +79,6 @@ impl UiComponent for SidePanel {
 
                 ui.add_space(5.0);
 
-                // === Active Generation Status ===
                 if self.active_jobs > 0 {
                     ui.separator();
 
@@ -159,7 +163,7 @@ impl UiComponent for SidePanel {
                 ui.label("• Mouse wheel: Zoom");
 
                 if ui.button("🔄 Reset Camera").clicked() {
-                    sender.instant(UiEvent::ResetCamera);
+                    ui_ctx.send_event(UiEvent::ResetCamera);
                 }
 
                 ui.separator();
@@ -175,13 +179,13 @@ impl UiComponent for SidePanel {
             });
     }
 
-    fn on_app_event(&mut self, ev: &AppEvent) {
+    async fn on_app_event(&mut self, ev: AppEvent) {
         match ev {
             AppEvent::JobQueued(_) => {
                 self.active_jobs += 1;
             }
             AppEvent::JobProgress { progress, message, .. } => {
-                self.progress = *progress;
+                self.progress = progress;
                 self.last_status = Some(message.clone());
             }
             AppEvent::JobComplete(_) | AppEvent::JobFailed { .. } => {

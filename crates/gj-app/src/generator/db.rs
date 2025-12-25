@@ -3,10 +3,16 @@ pub mod job;
 use std::path::PathBuf;
 use surrealdb::engine::local::{Db, RocksDb};
 use surrealdb::{Notification, Surreal};
-use crate::db::job::JobRecord;
+use crate::generator::db::job::{JobRecord};
 use anyhow::Result;
-use crate::job::JobStatus;
+use log::info;
+use surrealdb_types::RecordId;
+use thiserror::__private17::AsDisplay;
+use crate::job::{Job, JobStatus};
 
+const JOBS: &str = "jobs";
+
+#[derive(Debug, Clone)]
 pub struct JobDatabase {
     db: Surreal<Db>,
 }
@@ -14,12 +20,12 @@ pub struct JobDatabase {
 impl JobDatabase {
     /// Initialize SurrealDB with RocksDB backend (embedded, file-based)
     pub async fn new(db_path: PathBuf) -> Result<Self> {
+        info!("Setting up job database at {}", &db_path.as_display());
+
         // Create database directory
         std::fs::create_dir_all(&db_path)?;
 
-        // Connect to embedded RocksDB
         let db = Surreal::new::<RocksDb>(db_path).await?;
-
         // Use namespace and database
         db.use_ns("genjutsu").use_db("jobs").await?;
 
@@ -27,13 +33,13 @@ impl JobDatabase {
     }
 
     /// Insert a new job
-    pub async fn insert_job(&self, job: JobRecord) -> Result<()> {
-        let _: Option<JobRecord> = self.db
-            .create("jobs")
+    pub async fn insert_job(&self, id: String, job: Job) -> Result<Option<JobRecord>> {
+        let record: Option<JobRecord> = self.db
+            .create((JOBS, id))
             .content(job)
             .await?;
 
-        Ok(())
+        Ok(record)
     }
 
     /// Update job status
@@ -121,10 +127,10 @@ impl JobDatabase {
     }
 
     /// Delete a job
-    pub async fn delete_job(&self, job_id: String) -> Result<()> {
+    pub async fn delete_job(&self, id: RecordId) -> Result<()> {
         let _: Option<JobRecord> = self.db
             .query("DELETE FROM jobs WHERE job_id = $job_id")
-            .bind(("job_id", job_id))
+            .bind(("job_id", id))
             .await?
             .take(0)?;
 

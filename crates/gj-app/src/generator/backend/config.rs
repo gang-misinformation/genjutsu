@@ -7,10 +7,10 @@ pub struct GenBackendConfig {
 
 impl GenBackendConfig {
     pub fn load() -> anyhow::Result<Self> {
-        dotenvy::from_path("crates/gj-app/.env.public")?;
+        dotenvy::from_path("crates/gj-app/.env")?;
 
         let port: u16 = env::var("PORT")
-            .unwrap_or_else(|_| "3000".to_string())
+            .unwrap_or_else(|_| "5000".to_string())
             .parse()
             .expect("PORT must be a number");
 

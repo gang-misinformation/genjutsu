@@ -1,93 +1,66 @@
 use std::sync::Arc;
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::thread;
-use std::thread::JoinHandle;
-use image::RgbaImage;
-use gj_core::gaussian_cloud::GaussianCloud;
+use chrono::Utc;
+use surrealdb_types::RecordId;
+use winit::event_loop::EventLoopProxy;
 use gj_core::Model3D;
-use crate::backend::GenBackend;
-use crate::db::job::JobRecord;
+use db::job::JobRecord;
+use crate::events::GjEvent;
+use crate::generator::backend::GenBackend;
+use crate::generator::db::job::{SurrealDatetime};
+use crate::generator::db::JobDatabase;
+use crate::job::{Job, JobMetadata, JobInputs};
 
-pub enum GeneratorCommand {
-    GenerateFromImages(Vec<RgbaImage>),
-    GenerateFromPrompt { prompt: String, model: Model3D },
-    Shutdown,
-}
-
-pub enum GeneratorResponse {
-    Success(GaussianCloud),
-    Error(String),
-    Progress(String, f32, String),
-    Status(String),
-    JobSubmitted(JobRecord)
-}
+pub mod backend;
+pub mod db;
 
 pub struct Generator {
-    pub(crate) command_tx: Sender<GeneratorCommand>,
-    pub(crate) response_rx: Receiver<GeneratorResponse>,
-    thread_handle: Option<JoinHandle<()>>,
+    backend: GenBackend,
+    db: JobDatabase,
 }
 
 impl Generator {
-    pub async fn new() -> anyhow::Result<Self> {
-        let (cmd_tx, cmd_rx) = channel::<GeneratorCommand>();
-        let (resp_tx, resp_rx) = channel::<GeneratorResponse>();
-        
-        
-        let thread_handle = thread::spawn(move || {
-            // Generator loop
-            loop {
-                match cmd_rx.recv() {
-                    Ok(GeneratorCommand::GenerateFromImages(images)) => {
-                        let _ = resp_tx.send(GeneratorResponse::Status("Processing images...".into()));
-                        let _ = resp_tx.send(GeneratorResponse::Error(
-                            "Image-based generation not yet implemented with Shap-E. Use text prompts instead.".into()
-                        ));
-                    }
+    pub async fn new(event_loop_proxy: Arc<EventLoopProxy<GjEvent>>) -> anyhow::Result<Self> {
+        let backend = GenBackend::new(event_loop_proxy).await?;
 
-                    Ok(GeneratorCommand::GenerateFromPrompt { prompt, model }) => {
-                        let _ = resp_tx.send(GeneratorResponse::Status(
-                            format!("Submitting job to {} service...", model.name())
-                        ));
-
-                        let _ = resp_tx.send(GeneratorResponse::JobSubmitted);
-                        let _ = resp_tx.send(GeneratorResponse::Status(
-                            String::from("Job submitted")
-                        ));
-                    }
-
-                    Ok(GeneratorCommand::Shutdown) => {
-                        break;
-                    }
-
-                    Err(_) => {
-                        break;
-                    }
-                }
-            }
-        });
+        let db_path = std::env::current_dir()?.join("outputs/db");
+        let db = JobDatabase::new(db_path).await?;
 
         Ok(Self {
-            command_tx: cmd_tx,
-            response_rx: resp_rx,
-            thread_handle: Some(thread_handle),
+            backend,
+            db
         })
     }
 
-    pub fn try_recv_response(&self) -> Option<GeneratorResponse> {
-        self.response_rx.try_recv().ok()
+    pub async fn submit_job(&mut self, prompt: String, model: Model3D) -> anyhow::Result<()> {
+        let resp = self.backend.submit_job(prompt.clone(), model)?;
+        let job = Job {
+            inputs: JobInputs {
+                prompt,
+                model: model.id().to_string(),
+                guidance_scale: 15.0,
+                num_inference_steps: 64,
+            },
+            metadata: JobMetadata {
+                status: resp.status.into(),
+                progress: 0f32,
+                message: resp.message,
+                error: None,
+                created_at: SurrealDatetime::from(Utc::now()),
+                updated_at: SurrealDatetime::from(Utc::now()),
+                completed_at: None,
+            },
+            outputs: None
+        };
+        self.db.insert_job(resp.id, job).await?;
+
+        Ok(())
     }
 
-    fn shutdown(&mut self) {
-        let _ = self.command_tx.send(GeneratorCommand::Shutdown);
-        if let Some(handle) = self.thread_handle.take() {
-            let _ = handle.join();
-        }
+    pub async fn remove_job(&mut self, id: RecordId) -> anyhow::Result<()> {
+        self.db.delete_job(id).await
     }
-}
 
-impl Drop for Generator {
-    fn drop(&mut self) {
-        self.shutdown();
+    pub async fn get_jobs(&self) -> anyhow::Result<Vec<JobRecord>> {
+        self.db.get_all_jobs().await
     }
 }

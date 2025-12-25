@@ -7,21 +7,20 @@ mod events;
 mod gfx;
 mod generator;
 mod error;
-mod db;
-mod backend;
 mod job;
 
 use std::error::Error;
 use winit::event_loop::{ControlFlow, EventLoop};
 use crate::events::GjEvent;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    env_logger::init();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    tracing_subscriber::fmt::init();
 
     let mut event_loop: EventLoop<GjEvent> = EventLoop::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = app::App::default();
+    let mut app = app::App::new(&mut event_loop);
     event_loop.run_app(&mut app)?;
 
     Ok(())

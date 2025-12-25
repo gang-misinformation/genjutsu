@@ -16,6 +16,7 @@ keywords = ["diffusion", "splat"]
 
 [workspace.dependencies]
 anyhow = "1.0.100"
+async-trait = "0.1.89"
 burn = { version = "0.19.0", features = [] }
 burn-ndarray = "0.19.0"
 bytemuck = { version = "1.24.0", features = ["derive"] }

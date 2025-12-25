@@ -4,14 +4,27 @@ use winit::{
     event_loop::ActiveEventLoop,
 };
 use winit::application::ApplicationHandler;
+use winit::event_loop::{EventLoop, EventLoopProxy};
 use winit::window::{WindowAttributes, WindowId};
-use crate::events::GjEvent;
+use crate::events::{AppEvent, GjEvent};
 use crate::state::AppState;
 
-#[derive(Default)]
 pub struct App {
+    event_loop_proxy: Arc<EventLoopProxy<GjEvent>>,
     state: Option<AppState>,
     needs_redraw: bool,
+}
+
+impl App {
+    pub fn new(event_loop: &mut EventLoop<GjEvent>) -> Self {
+        let event_loop_proxy = Arc::new(event_loop.create_proxy());
+
+        Self {
+            event_loop_proxy,
+            state: None,
+            needs_redraw: false,
+        }
+    }
 }
 
 impl ApplicationHandler<GjEvent> for App {
@@ -22,7 +35,7 @@ impl ApplicationHandler<GjEvent> for App {
 
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
-        let state = pollster::block_on(AppState::new(window.clone())).unwrap();
+        let state = pollster::block_on(AppState::new(window.clone(), self.event_loop_proxy.clone())).unwrap();
         self.state = Some(state);
         self.needs_redraw = true;
     }
@@ -30,12 +43,14 @@ impl ApplicationHandler<GjEvent> for App {
         if let Some(state) = &mut self.state {
             match event {
                 GjEvent::Ui(e) => {
-
+                    state.on_ui_event(e);
                 }
                 GjEvent::App(e) => {
-                    state.ui.push_app_event(e);
                     self.needs_redraw = true;
                     state.window.request_redraw();
+                }
+                GjEvent::Gen(e) => {
+
                 }
             }
         }
@@ -85,7 +100,6 @@ impl ApplicationHandler<GjEvent> for App {
                     self.needs_redraw = true;
                 }
                 WindowEvent::RedrawRequested => {
-                    state.update();
                     let _ = state.render();
                     self.needs_redraw = false;
                 }

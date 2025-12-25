@@ -11,6 +11,7 @@ keywords.workspace = true
 gj-core.path = "../gj-core"
 gj-splat.path = "../gj-splat"
 anyhow.workspace = true
+async-trait.workspace = true
 burn.workspace = true
 burn-ndarray.workspace = true
 burn-wgpu.workspace = true
@@ -29,11 +30,14 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 winit.workspace = true
-axum = { version = "0.8.7", features = ["json"]}
+axum = { version = "0.8.8", features = ["json", "tokio"]}
 dolly = "0.6.0"
 rfd = "0.16.0"
 pollster = "0.4.0"
-surrealdb = { version = "2.2.3", features = ["kv-rocksdb"] }
+surrealdb = { version = "3.0.0-beta.1", features = ["kv-rocksdb", "arbitrary"] }
+surrealdb-types = "3.0.0-beta.1"
+tracing-subscriber = "0.3.22"
 dotenvy = "0.15.7"
