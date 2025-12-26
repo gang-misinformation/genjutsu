@@ -50,7 +50,7 @@ impl ApplicationHandler<GjEvent> for App {
                     state.window.request_redraw();
                 }
                 GjEvent::Gen(e) => {
-
+                    
                 }
             }
         }

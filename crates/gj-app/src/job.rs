@@ -57,15 +57,20 @@ impl fmt::Display for JobStatus{
     }
 }
 
-impl Into<JobStatus> for String {
-    fn into(self) -> JobStatus {
-        match self.as_str() {
-            "Complete" => JobStatus::Complete,
-            "Failed" => JobStatus::Failed,
-            "Generating" => JobStatus::Generating,
-            "Queued" => JobStatus::Queued,
-            "Submitting" => JobStatus::Submitting,
-            _ => panic!("Invalid job status: {}", self)
+impl From<String> for JobStatus {
+    fn from(s: String) -> Self {
+        match s.to_uppercase().as_str() {
+            "COMPLETE" => JobStatus::Complete,
+            "FAILED" => JobStatus::Failed,
+            "GENERATING" => JobStatus::Generating,
+            "QUEUED" => JobStatus::Queued,
+            "SUBMITTING" => JobStatus::Submitting,
+            "STARTED" => JobStatus::Generating, // Map Python's STARTED to GENERATING
+            "SUCCESS" => JobStatus::Complete,   // Map Python's SUCCESS to COMPLETE
+            _ => {
+                eprintln!("Unknown job status: {}, defaulting to Queued", s);
+                JobStatus::Queued
+            }
         }
     }
 }

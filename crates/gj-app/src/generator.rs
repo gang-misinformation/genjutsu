@@ -32,7 +32,7 @@ impl Generator {
     }
 
     pub async fn submit_job(&mut self, prompt: String, model: Model3D) -> anyhow::Result<()> {
-        let resp = self.backend.submit_job(prompt.clone(), model)?;
+        let resp = self.backend.submit_job(prompt.clone(), model).await?;
         let job = Job {
             inputs: JobInputs {
                 prompt,

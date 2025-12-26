@@ -2,32 +2,37 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from enum import Enum
 
-class GenerateRequest(BaseModel):
+class JobCreateRequest(BaseModel):
     prompt: str = Field(..., description="Text description of 3D object")
     model: str = Field(default="shap_e", description="Model to use")
     guidance_scale: float = Field(default=15.0, ge=1.0, le=30.0)
     num_inference_steps: int = Field(default=64, ge=16, le=256)
 
 class JobStatus(str, Enum):
-    PENDING = "PENDING"
-    STARTED = "STARTED"
-    SUCCESS = "SUCCESS"
-    FAILURE = "FAILURE"
-    RETRY = "RETRY"
-    REVOKED = "REVOKED"
+    QUEUED="QUEUED",
+    SUBMITTING="SUBMITTING",
+    GENERATING="GENERATING",
+    COMPLETE="COMPLETE",
+    FAILED="FAILED"
 
-class JobResponse(BaseModel):
-    job_id: str
+class JobCreateResponse(BaseModel):
+    id: str
     status: JobStatus
     message: Optional[str] = None
 
-class GenerationResult(BaseModel):
+class JobOutputs(BaseModel):
     ply_path: str
 
-class JobStatusResponse(BaseModel):
-    job_id: str
+class JobMetadata(BaseModel):
     status: JobStatus
-    progress: Optional[float] = None
+    progress: float = None
     message: Optional[str] = None
-    result: Optional[GenerationResult] = None
     error: Optional[str] = None
+    created_at: str = None
+    updated_at: str = None
+    completed_at: Optional[str] = None
+
+class JobStatusResponse(BaseModel):
+    id: str
+    data: JobMetadata
+    outputs: Optional[JobOutputs] = None

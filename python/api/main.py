@@ -57,26 +57,27 @@ async def list_workers():
     }
 
 
-@app.post("/generate", response_model=JobResponse)
-async def generate(request: GenerateRequest):
+@app.post("/generate", response_model=JobCreateResponse)
+async def generate(request: JobCreateRequest):
     """
     Submit a 3D generation job
     
     Returns job_id for tracking progress
     """
-    from worker.tasks import generate_3d
     try:
-        # Submit task to Celery
-        task = generate_3d.delay(
-            request.prompt,
-            request.model,
-            request.guidance_scale,
-            request.num_inference_steps
+        task = celery_app.send_task(
+            'worker.generate_3d',
+            args=[
+                request.prompt,
+                request.model,
+                request.guidance_scale,
+                request.num_inference_steps
+            ]
         )
 
-        return JobResponse(
-            job_id=task.id,
-            status=JobStatus.STARTED,
+        return JobCreateResponse(
+            id=task.id,
+            status=JobStatus.QUEUED,
             message=f"Job submitted for model '{request.model}'"
         )
 
@@ -93,32 +94,32 @@ async def get_status(job_id: str):
         result = celery_app.AsyncResult(job_id)
 
         response = JobStatusResponse(
-            job_id=job_id,
-            status=result.state
+            id=job_id
         )
+        response.data.status = JobStatus(result.state)
 
         if result.state == JobStatus.PENDING.value:
-            response.message = "Job is queued"
+            response.data.message = "Job is queued"
 
         elif result.state == JobStatus.STARTED.value:
             # Get progress if available
             if result.info and isinstance(result.info, dict):
-                response.progress = result.info.get('progress', 0.0)
-                response.message = result.info.get('message', 'Processing...')
+                response.data.progress = result.info.get('progress', 0.0)
+                response.data.message = result.info.get('message', 'Processing...')
             else:
-                response.message = "Job started"
+                response.data.message = "Job started"
 
         elif result.state ==  JobStatus.SUCCESS.value:
-            response.message = "Generation complete"
-            response.progress = 1.0
-            response.result = result.result
+            response.data.message = "Generation complete"
+            response.data.progress = 1.0
+            response.outputs = JobOutputs(ply_path=result.result)
 
         elif result.state == JobStatus.FAILURE.value:
-            response.message = "Job failed"
-            response.error = str(result.info)
+            response.data.message = "Job failed"
+            response.data.error = str(result.info)
 
         elif result.state == JobStatus.RETRY.value:
-            response.message = "Job is being retried"
+            response.data.message = "Job is being retried"
 
         return response
 

@@ -24,9 +24,9 @@ impl QueuePanel {
                 ui.horizontal(|ui| {
                     // Status icon
                     ui.label(
-                        RichText::new(job.data.metadata.status.icon())
+                        RichText::new(job.metadata.status.icon())
                             .size(24.0)
-                            .color(job.data.metadata.status.color())
+                            .color(job.metadata.status.color())
                     );
 
                     ui.add_space(5.0);
@@ -34,25 +34,25 @@ impl QueuePanel {
                     // Job details
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(&job.data.inputs.prompt).strong());
+                            ui.label(RichText::new(&job.inputs.prompt).strong());
                             ui.label(
-                                RichText::new(format!("({})", job.data.inputs.model))
+                                RichText::new(format!("({})", job.inputs.model))
                                     .small()
                                     .color(Color32::GRAY)
                             );
                         });
 
-                        if let Some(message) = &job.data.metadata.message {
+                        if let Some(message) = &job.metadata.message {
                             ui.label(
                                 RichText::new(message)
                                     .small()
-                                    .color(job.data.metadata.status.color())
+                                    .color(job.metadata.status.color())
                             );
                         }
 
                         // Time info
-                        let created_date: chrono::DateTime<chrono::Utc> = job.data.metadata.created_at.clone().into();
-                        let time_str = if let Some(completed) = &job.data.metadata.completed_at {
+                        let created_date: chrono::DateTime<chrono::Utc> = job.metadata.created_at.clone().into();
+                        let time_str = if let Some(completed) = &job.metadata.completed_at {
                             let completed_date: chrono::DateTime<chrono::Utc> = completed.clone().into();
                             let duration = (completed_date - created_date).num_seconds();
                             format!("Completed in {}s", duration)
@@ -65,10 +65,10 @@ impl QueuePanel {
 
                     // Right side - progress/actions
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        match &job.data.metadata.status {
+                        match &job.metadata.status {
                             JobStatus::Generating => {
                                 ui.add(
-                                    egui::ProgressBar::new(job.data.metadata.progress)
+                                    egui::ProgressBar::new(job.metadata.progress)
                                         .desired_width(150.0)
                                         .show_percentage()
                                         .animate(true)
@@ -94,7 +94,7 @@ impl QueuePanel {
                                 }
                             }
                             JobStatus::Failed => {
-                                if let Some(error) = &job.data.metadata.error {
+                                if let Some(error) = &job.metadata.error {
                                     ui.label(
                                         RichText::new(error)
                                             .color(Color32::RED)
@@ -164,8 +164,8 @@ impl UiComponent for QueuePanel {
                         ui.add_space(10.0);
 
                         // Stats
-                        let active = ui_ctx.jobs.iter().filter(|j| j.data.metadata.status.is_active()).count();
-                        let completed = ui_ctx.jobs.iter().filter(|j| j.data.metadata.status.is_complete()).count();
+                        let active = ui_ctx.jobs.iter().filter(|j| j.metadata.status.is_active()).count();
+                        let completed = ui_ctx.jobs.iter().filter(|j| j.metadata.status.is_complete()).count();
 
                         ui.label(
                             RichText::new(format!("Active: {} | Completed: {}", active, completed))
@@ -184,7 +184,7 @@ impl UiComponent for QueuePanel {
 
                         for job in &ui_ctx.jobs {
                             // Filter completed if hidden
-                            if !self.show_completed && job.data.metadata.status.is_complete() {
+                            if !self.show_completed && job.metadata.status.is_complete() {
                                 continue;
                             }
 
