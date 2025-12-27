@@ -39,6 +39,7 @@ impl ApplicationHandler<GjEvent> for App {
         self.state = Some(state);
         self.needs_redraw = true;
     }
+
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: GjEvent) {
         if let Some(state) = &mut self.state {
             match event {
@@ -50,11 +51,19 @@ impl ApplicationHandler<GjEvent> for App {
                     state.window.request_redraw();
                 }
                 GjEvent::Gen(e) => {
-                    
+                    // Handle job status updates from Python worker
+                    pollster::block_on(async {
+                        if let Err(e) = state.on_gen_event(e).await {
+                            eprintln!("Error handling gen event: {}", e);
+                        }
+                    });
+                    self.needs_redraw = true;
+                    state.window.request_redraw();
                 }
             }
         }
     }
+
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -137,6 +146,7 @@ impl ApplicationHandler<GjEvent> for App {
             }
         }
     }
+
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         // Only request redraw if we actually need one
         // Remove the constant redraw requests that were causing performance issues

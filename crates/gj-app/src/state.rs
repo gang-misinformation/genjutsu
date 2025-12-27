@@ -4,13 +4,14 @@ use egui_wgpu::wgpu::StoreOp;
 use winit::event::WindowEvent;
 use winit::window::Window;
 use chrono::Utc;
+use log::info;
 use surrealdb::types::Datetime as SurrealDatetime;
 use winit::event_loop::EventLoopProxy;
 use gj_core::gaussian_cloud::GaussianCloud;
 use gj_splat::camera::Camera;
 use gj_splat::renderer::GaussianRenderer;
 use crate::generator::db::job::JobRecord;
-use crate::events::{AppEvent, GjEvent};
+use crate::events::{AppEvent, GenEvent, GjEvent};
 use crate::generator::Generator;
 use crate::gfx::GfxState;
 use crate::job::JobStatus;
@@ -62,7 +63,7 @@ impl AppState {
         let size = window.inner_size();
         camera.aspect_ratio = size.width as f32 / size.height as f32;
 
-        Ok(Self {
+        let mut state = Self {
             window,
             event_loop_proxy,
             renderer,
@@ -75,7 +76,20 @@ impl AppState {
             mouse_pressed: false,
             last_mouse_pos: None,
             generator
-        })
+        };
+
+        // Load existing jobs from database
+        state.load_jobs().await?;
+
+        Ok(state)
+    }
+
+    /// Load all jobs from database and update UI
+    async fn load_jobs(&mut self) -> anyhow::Result<()> {
+        let jobs = self.generator.get_jobs().await?;
+        println!("Loaded {} jobs from database", jobs.len());
+        self.ui.set_jobs(jobs);
+        Ok(())
     }
 
     pub fn push_event(&self, event: AppEvent) {
@@ -259,8 +273,7 @@ impl AppState {
                 match event {
                     UiEvent::GenerateWithModel { prompt, model } => {
                         self.generator.submit_job(prompt, model).await?;
-                        let jobs = self.generator.get_jobs().await?;
-                        self.ui.set_jobs(jobs);
+                        self.load_jobs().await?;
                     }
                     UiEvent::ResetCamera => {
                         self.reset_camera();
@@ -268,11 +281,85 @@ impl AppState {
                     }
                     UiEvent::RemoveJob(id) => {
                         self.generator.remove_job(id).await?;
-                    },
+                        self.load_jobs().await?;
+                    }
+                    UiEvent::LoadScene(id) => {
+                        self.load_scene_by_id(id).await?;
+                    }
+                    UiEvent::ClearCompletedJobs => {
+                        self.generator.clear_completed().await?;
+                        self.load_jobs().await?;
+                    }
                     _ => {}
                 }
                 anyhow::Ok(())
             }
         ).unwrap();
+    }
+
+    /// Handle job status updates from Python worker
+    pub async fn on_gen_event(&mut self, event: GenEvent) -> anyhow::Result<()> {
+        match event {
+            GenEvent::JobStatus { id, data, outputs } => {
+                info!("Job status update: {} - {:?}", id, data.status);
+
+                // Update job in database
+                self.generator.update_job_status(id.clone(), data.clone(), outputs.clone()).await?;
+
+                // Refresh UI
+                self.load_jobs().await?;
+
+                // If job completed successfully, optionally auto-load it
+                if data.status == JobStatus::Complete {
+                    if let Some(outputs) = outputs {
+                        info!("Job complete! PLY at: {}", outputs.ply_path);
+                        self.load_scene_from_path(&outputs.ply_path).await?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Load a scene by job ID
+    async fn load_scene_by_id(&mut self, id: surrealdb_types::RecordId) -> anyhow::Result<()> {
+        let jobs = self.generator.get_jobs().await?;
+
+        if let Some(job) = jobs.iter().find(|j| j.id == id) {
+            if let Some(ref outputs) = job.outputs {
+                self.load_scene_from_path(&outputs.ply_path).await?;
+                self.ui.ui_ctx.current_job_id = Some(id);
+            } else {
+                println!("Job has no outputs yet");
+            }
+        } else {
+            println!("Job not found: {:?}", id);
+        }
+
+        Ok(())
+    }
+
+    /// Load a scene from a PLY file path
+    async fn load_scene_from_path(&mut self, ply_path: &str) -> anyhow::Result<()> {
+        println!("Loading scene from: {}", ply_path);
+
+        // Convert relative path to absolute
+        let path = std::env::current_dir()?.join(ply_path);
+
+        if !path.exists() {
+            anyhow::bail!("PLY file not found: {}", path.display());
+        }
+
+        // Load Gaussian cloud from PLY
+        let cloud = GaussianCloud::from_ply(&path)?;
+        println!("Loaded {} Gaussians from {}", cloud.count, path.display());
+
+        // Load into renderer
+        self.load_gaussian_cloud(cloud);
+
+        self.push_event(AppEvent::SceneReady);
+
+        Ok(())
     }
 }

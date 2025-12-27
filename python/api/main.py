@@ -93,15 +93,32 @@ async def get_status(job_id: str):
     try:
         result = celery_app.AsyncResult(job_id)
 
-        response = JobStatusResponse(
-            id=job_id
-        )
-        response.data.status = JobStatus(result.state)
+        # Map Celery states to our JobStatus enum
+        state_mapping = {
+            'PENDING': JobStatus.QUEUED,
+            'STARTED': JobStatus.GENERATING,
+            'SUCCESS': JobStatus.COMPLETE,
+            'FAILURE': JobStatus.FAILED,
+            'RETRY': JobStatus.GENERATING,
+            'REVOKED': JobStatus.FAILED,
+        }
 
-        if result.state == JobStatus.PENDING.value:
+        status = state_mapping.get(result.state, JobStatus.QUEUED)
+
+        response = JobStatusResponse(
+            id=job_id,
+            data=JobMetadata(
+                status=status,
+                progress=0.0,
+                message=None,
+                error=None
+            )
+        )
+
+        if result.state == 'PENDING':
             response.data.message = "Job is queued"
 
-        elif result.state == JobStatus.STARTED.value:
+        elif result.state == 'STARTED':
             # Get progress if available
             if result.info and isinstance(result.info, dict):
                 response.data.progress = result.info.get('progress', 0.0)
@@ -109,16 +126,17 @@ async def get_status(job_id: str):
             else:
                 response.data.message = "Job started"
 
-        elif result.state ==  JobStatus.SUCCESS.value:
+        elif result.state == 'SUCCESS':
             response.data.message = "Generation complete"
             response.data.progress = 1.0
-            response.outputs = JobOutputs(ply_path=result.result)
+            if result.result and isinstance(result.result, dict):
+                response.outputs = JobOutputs(ply_path=result.result.get('ply_path', ''))
 
-        elif result.state == JobStatus.FAILURE.value:
+        elif result.state == 'FAILURE':
             response.data.message = "Job failed"
             response.data.error = str(result.info)
 
-        elif result.state == JobStatus.RETRY.value:
+        elif result.state == 'RETRY':
             response.data.message = "Job is being retried"
 
         return response
@@ -132,7 +150,7 @@ async def cancel_job(job_id: str):
     """Cancel a running job"""
     try:
         celery_app.control.revoke(job_id, terminate=True)
-        return {"job_id": job_id, "status": JobStatus.REVOKED.value}
+        return {"job_id": job_id, "status": "REVOKED"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

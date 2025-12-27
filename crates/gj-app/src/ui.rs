@@ -15,10 +15,9 @@ use surrealdb_types::RecordId;
 use winit::event_loop::EventLoopProxy;
 use winit::window::Window;
 use gj_core::Model3D;
-use crate::generator::db::job::{JobRecord};
+use crate::generator::db::job::JobRecord;
 use crate::events::{AppEvent, GjEvent};
 use crate::gfx::GfxState;
-use crate::state::AppState;
 
 #[derive(Debug, Clone)]
 pub enum UiEvent {
@@ -81,10 +80,7 @@ impl UiState {
         );
 
         let egui_renderer = egui_wgpu::Renderer::new(
-            &gfx.device,
-            gfx.config.format,
-            egui_wgpu::RendererOptions::default()
-        );
+            &gfx.device, gfx.config.format, egui_wgpu::RendererOptions::default());
 
         Self {
             egui_ctx,
@@ -108,7 +104,7 @@ impl UiState {
     pub fn add_component(&mut self, component: Box<dyn UiComponent>) {
         self.components.push(component);
     }
-    
+
     pub fn set_jobs(&mut self, jobs: Vec<JobRecord>) {
         self.ui_ctx.jobs = jobs;
     }
@@ -117,6 +113,6 @@ impl UiState {
 #[async_trait]
 pub trait UiComponent : Send + Sync {
     fn show(&mut self, ctx: &Context, ui_ctx: &UiContext);
-    
+
     async fn on_app_event(&mut self, e: AppEvent) {}
 }

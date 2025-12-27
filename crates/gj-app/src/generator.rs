@@ -6,9 +6,9 @@ use gj_core::Model3D;
 use db::job::JobRecord;
 use crate::events::GjEvent;
 use crate::generator::backend::GenBackend;
-use crate::generator::db::job::{SurrealDatetime};
+use crate::generator::db::job::SurrealDatetime;
 use crate::generator::db::JobDatabase;
-use crate::job::{Job, JobMetadata, JobInputs};
+use crate::job::{Job, JobMetadata, JobInputs, JobOutputs, JobStatus};
 
 pub mod backend;
 pub mod db;
@@ -41,7 +41,7 @@ impl Generator {
                 num_inference_steps: 64,
             },
             metadata: JobMetadata {
-                status: resp.status.into(),
+                status: JobStatus::Queued,
                 progress: 0f32,
                 message: resp.message,
                 error: None,
@@ -62,5 +62,20 @@ impl Generator {
 
     pub async fn get_jobs(&self) -> anyhow::Result<Vec<JobRecord>> {
         self.db.get_all_jobs().await
+    }
+
+    /// Update job status when we receive callbacks from Python
+    pub async fn update_job_status(
+        &mut self,
+        job_id: String,
+        metadata: JobMetadata,
+        outputs: Option<JobOutputs>
+    ) -> anyhow::Result<()> {
+        self.db.update_job(job_id, metadata, outputs).await
+    }
+
+    /// Clear all completed jobs
+    pub async fn clear_completed(&mut self) -> anyhow::Result<()> {
+        self.db.clear_completed().await
     }
 }

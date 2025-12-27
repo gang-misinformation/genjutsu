@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use egui::{Color32, Context, RichText, Ui};
 use surrealdb_types::RecordId;
-use crate::generator::db::job::{JobRecord};
-use crate::events::{AppEvent};
+use crate::generator::db::job::JobRecord;
+use crate::events::AppEvent;
 use crate::job::JobStatus;
 use crate::state::AppState;
 use crate::ui::{UiComponent, UiContext, UiEvent};
@@ -108,10 +108,6 @@ impl QueuePanel {
                             }
                             JobStatus::Queued => {
                                 ui.label(RichText::new("Waiting...").color(Color32::GRAY));
-                            }
-                            JobStatus::Submitting => {
-                                ui.spinner();
-                                ui.label(RichText::new("Submitting...").color(Color32::GRAY));
                             }
                         }
                     });

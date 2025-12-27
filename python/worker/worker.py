@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.celery_app import celery_app
 from shared.config import OUTPUT_DIR, DEVICE
+from shared.schemas.jobs import JobStatus
 from models.shap_e import ShapEModel
 
 # Load models on worker startup
@@ -51,8 +52,6 @@ def update_job_status(job_id: str, metadata: dict, outputs: dict = None):
     - outputs: Optional JobOutputs (ply_path)
     """
     try:
-        from datetime import datetime
-
         # Build payload matching Rust JobStatusResponse schema
         payload = {
             "id": job_id,
@@ -102,13 +101,13 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
             update_job_status(
                 job_id,
                 metadata={
-                    "status": "FAILED",
+                    "status": JobStatus.FAILED.value,
                     "progress": 0.0,
                     "message": None,
                     "error": error_msg,
                     "created_at": datetime.utcnow().isoformat() + 'Z',
                     "updated_at": datetime.utcnow().isoformat() + 'Z',
-                    "completed_at": None
+                    "completed_at": datetime.utcnow().isoformat() + 'Z'
                 }
             )
             raise ValueError(error_msg)
@@ -136,7 +135,7 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
         update_job_status(
             job_id,
             metadata={
-                "status": "GENERATING",
+                "status": JobStatus.GENERATING.value,
                 "progress": 0.0,
                 "message": "Initializing generation...",
                 "error": None,
@@ -147,12 +146,11 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
         )
 
         # Progress callback
-        # Progress callback
         def progress_callback(progress: float, message: str):
             update_job_status(
                 job_id,
                 metadata={
-                    "status": "GENERATING",
+                    "status": JobStatus.GENERATING.value,
                     "progress": progress,
                     "message": message,
                     "error": None,
@@ -194,7 +192,7 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
             update_job_status(
                 job_id,
                 metadata={
-                    "status": "FAILED",
+                    "status": JobStatus.FAILED.value,
                     "progress": 0.0,
                     "message": None,
                     "error": error_msg,
@@ -215,7 +213,7 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
         update_job_status(
             job_id,
             metadata={
-                "status": "COMPLETE",
+                "status": JobStatus.COMPLETE.value,
                 "progress": 1.0,
                 "message": "Generation complete!",
                 "error": None,
@@ -239,7 +237,7 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
         update_job_status(
             job_id,
             metadata={
-                "status": "FAILED",
+                "status": JobStatus.FAILED.value,
                 "progress": 0.0,
                 "message": None,
                 "error": error_msg,

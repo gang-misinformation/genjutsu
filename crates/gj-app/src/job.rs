@@ -8,7 +8,6 @@ use crate::generator::db::job::SurrealDatetime;
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum JobStatus {
     Queued,
-    Submitting,
     Generating,
     Complete,
     Failed,
@@ -16,7 +15,7 @@ pub enum JobStatus {
 
 impl JobStatus {
     pub fn is_active(&self) -> bool {
-        matches!(self, Self::Queued | Self::Submitting | Self::Generating)
+        matches!(self, Self::Queued | Self::Generating)
     }
 
     pub fn is_complete(&self) -> bool {
@@ -26,7 +25,6 @@ impl JobStatus {
     pub fn icon(&self) -> &str {
         match self {
             Self::Queued => "⏳",
-            Self::Submitting => "📤",
             Self::Generating => "⚡",
             Self::Complete => "✅",
             Self::Failed => "❌",
@@ -36,14 +34,12 @@ impl JobStatus {
     pub fn color(&self) -> egui::Color32 {
         match self {
             Self::Queued => egui::Color32::GRAY,
-            Self::Submitting => egui::Color32::LIGHT_BLUE,
             Self::Generating => egui::Color32::YELLOW,
             Self::Complete => egui::Color32::GREEN,
             Self::Failed => egui::Color32::RED,
         }
     }
 }
-
 
 impl fmt::Display for JobStatus{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -52,25 +48,6 @@ impl fmt::Display for JobStatus{
             JobStatus::Failed => write!(f, "Failed"),
             JobStatus::Generating => write!(f, "Generating"),
             JobStatus::Queued => write!(f, "Queued"),
-            JobStatus::Submitting => write!(f, "Submitting")
-        }
-    }
-}
-
-impl From<String> for JobStatus {
-    fn from(s: String) -> Self {
-        match s.to_uppercase().as_str() {
-            "COMPLETE" => JobStatus::Complete,
-            "FAILED" => JobStatus::Failed,
-            "GENERATING" => JobStatus::Generating,
-            "QUEUED" => JobStatus::Queued,
-            "SUBMITTING" => JobStatus::Submitting,
-            "STARTED" => JobStatus::Generating, // Map Python's STARTED to GENERATING
-            "SUCCESS" => JobStatus::Complete,   // Map Python's SUCCESS to COMPLETE
-            _ => {
-                eprintln!("Unknown job status: {}, defaulting to Queued", s);
-                JobStatus::Queued
-            }
         }
     }
 }

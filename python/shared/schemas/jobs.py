@@ -9,11 +9,11 @@ class JobCreateRequest(BaseModel):
     num_inference_steps: int = Field(default=64, ge=16, le=256)
 
 class JobStatus(str, Enum):
-    QUEUED="QUEUED",
-    SUBMITTING="SUBMITTING",
-    GENERATING="GENERATING",
-    COMPLETE="COMPLETE",
-    FAILED="FAILED"
+    """Job status matching Rust JobStatus enum exactly"""
+    QUEUED = "QUEUED"
+    GENERATING = "GENERATING"
+    COMPLETE = "COMPLETE"
+    FAILED = "FAILED"
 
 class JobCreateResponse(BaseModel):
     id: str
@@ -25,11 +25,11 @@ class JobOutputs(BaseModel):
 
 class JobMetadata(BaseModel):
     status: JobStatus
-    progress: float = None
+    progress: float = 0.0
     message: Optional[str] = None
     error: Optional[str] = None
-    created_at: str = None
-    updated_at: str = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     completed_at: Optional[str] = None
 
 class JobStatusResponse(BaseModel):

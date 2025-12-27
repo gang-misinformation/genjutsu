@@ -8,7 +8,7 @@ use anyhow::Result;
 use log::info;
 use surrealdb_types::RecordId;
 use thiserror::__private17::AsDisplay;
-use crate::job::{Job, JobStatus};
+use crate::job::{Job, JobMetadata, JobOutputs, JobStatus};
 
 const JOBS: &str = "jobs";
 
@@ -42,7 +42,23 @@ impl JobDatabase {
         Ok(record)
     }
 
-    /// Update job status
+    pub async fn update_job(
+        &self,
+        job_id: String,
+        metadata: JobMetadata,
+        outputs: Option<JobOutputs>
+    ) -> Result<()> {
+        let _: Option<JobRecord> = self.db
+            .update((JOBS, job_id))
+            .merge(serde_json::json!({
+                "metadata": metadata,
+                "outputs": outputs,
+            }))
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn update_status(
         &self,
         job_id: String,
@@ -51,13 +67,14 @@ impl JobDatabase {
         message: Option<String>,
     ) -> Result<()> {
         let _: Option<JobRecord> = self.db
-            .query("UPDATE jobs SET status = $status, progress = $progress, message = $message, updated_at = time::now() WHERE job_id = $job_id")
-            .bind(("job_id", job_id))
-            .bind(("status", status))
-            .bind(("progress", progress))
-            .bind(("message", message))
-            .await?
-            .take(0)?;
+            .update((JOBS, job_id))
+            .merge(serde_json::json!({
+                "metadata.status": status,
+                "metadata.progress": progress,
+                "metadata.message": message,
+                "metadata.updated_at": chrono::Utc::now(),
+            }))
+            .await?;
 
         Ok(())
     }
@@ -65,12 +82,17 @@ impl JobDatabase {
     /// Mark job as complete with result path
     pub async fn complete_job(&self, job_id: String, ply_path: PathBuf) -> Result<()> {
         let _: Option<JobRecord> = self.db
-            .query("UPDATE jobs SET status = $status, progress = 1.0, ply_path = $ply_path, updated_at = time::now() WHERE job_id = $job_id")
-            .bind(("job_id", job_id))
-            .bind(("status", JobStatus::Complete))
-            .bind(("ply_path", ply_path.to_string_lossy().to_string()))
-            .await?
-            .take(0)?;
+            .update((JOBS, job_id))
+            .merge(serde_json::json!({
+                "metadata.status": JobStatus::Complete,
+                "metadata.progress": 1.0,
+                "metadata.updated_at": chrono::Utc::now(),
+                "metadata.completed_at": chrono::Utc::now(),
+                "outputs": {
+                    "ply_path": ply_path.to_string_lossy().to_string()
+                }
+            }))
+            .await?;
 
         Ok(())
     }
@@ -78,71 +100,80 @@ impl JobDatabase {
     /// Mark job as failed
     pub async fn fail_job(&self, job_id: String, error: String) -> Result<()> {
         let _: Option<JobRecord> = self.db
-            .query("UPDATE jobs SET status = $status, error = $error, updated_at = time::now() WHERE job_id = $job_id")
-            .bind(("job_id", job_id))
-            .bind(("status", JobStatus::Failed))
-            .bind(("error", error))
-            .await?
-            .take(0)?;
+            .update((JOBS, job_id))
+            .merge(serde_json::json!({
+                "metadata.status": JobStatus::Failed,
+                "metadata.error": error,
+                "metadata.updated_at": chrono::Utc::now(),
+                "metadata.completed_at": chrono::Utc::now(),
+            }))
+            .await?;
 
         Ok(())
     }
 
     /// Get job by ID
     pub async fn get_job(&self, job_id: String) -> Result<Option<JobRecord>> {
-        let mut result = self.db
-            .query("SELECT * FROM jobs WHERE job_id = $job_id")
-            .bind(("job_id", job_id))
+        let record: Option<JobRecord> = self.db
+            .select((JOBS, job_id))
             .await?;
 
-        let jobs: Vec<JobRecord> = result.take(0)?;
-        Ok(jobs.into_iter().next())
+        Ok(record)
     }
 
     /// Get all jobs, ordered by created_at DESC
     pub async fn get_all_jobs(&self) -> Result<Vec<JobRecord>> {
-        let mut result = self.db
-            .query("SELECT * FROM jobs ORDER BY created_at DESC")
-            .await?;
+        let jobs: Vec<JobRecord> = match self.db.select(JOBS).await {
+            Ok(jobs) => jobs,
+            Err(_) => {
+                // Table might not exist yet, return empty vec
+                return Ok(Vec::new());
+            }
+        };
 
-        Ok(result.take(0)?)
+        // Sort by created_at descending
+        let mut jobs = jobs;
+        jobs.sort_by(|a, b| {
+            let time_a: chrono::DateTime<chrono::Utc> = a.metadata.created_at.clone().into();
+            let time_b: chrono::DateTime<chrono::Utc> = b.metadata.created_at.clone().into();
+            time_b.cmp(&time_a)
+        });
+
+        Ok(jobs)
     }
 
     /// Get active jobs only
     pub async fn get_active_jobs(&self) -> Result<Vec<JobRecord>> {
-        let mut result = self.db
-            .query("SELECT * FROM jobs WHERE status IN ['Queued', 'Submitting', 'Generating'] ORDER BY created_at DESC")
-            .await?;
-
-        Ok(result.take(0)?)
+        let jobs = self.get_all_jobs().await?;
+        Ok(jobs.into_iter()
+            .filter(|j| j.metadata.status.is_active())
+            .collect())
     }
 
     /// Get completed jobs only
     pub async fn get_completed_jobs(&self) -> Result<Vec<JobRecord>> {
-        let mut result = self.db
-            .query("SELECT * FROM jobs WHERE status IN ['Complete', 'Failed'] ORDER BY created_at DESC")
-            .await?;
-
-        Ok(result.take(0)?)
+        let jobs = self.get_all_jobs().await?;
+        Ok(jobs.into_iter()
+            .filter(|j| j.metadata.status.is_complete())
+            .collect())
     }
 
     /// Delete a job
     pub async fn delete_job(&self, id: RecordId) -> Result<()> {
         let _: Option<JobRecord> = self.db
-            .query("DELETE FROM jobs WHERE job_id = $job_id")
-            .bind(("job_id", id))
-            .await?
-            .take(0)?;
+            .delete(id)
+            .await?;
 
         Ok(())
     }
 
     /// Clear all completed jobs
     pub async fn clear_completed(&self) -> Result<()> {
-        let _: Vec<JobRecord> = self.db
-            .query("DELETE FROM jobs WHERE status IN ['Complete', 'Failed']")
-            .await?
-            .take(0)?;
+        let jobs = self.get_completed_jobs().await?;
+
+        for job in jobs {
+            let _: Option<JobRecord> = self.db.delete(job.id).await?;
+        }
 
         Ok(())
     }
