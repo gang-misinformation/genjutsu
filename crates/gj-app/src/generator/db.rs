@@ -48,12 +48,32 @@ impl JobDatabase {
         metadata: JobMetadata,
         outputs: Option<JobOutputs>
     ) -> Result<()> {
-        let _: Option<JobRecord> = self.db
-            .update((JOBS, job_id))
-            .merge(serde_json::json!({
+        self.db
+            .query("UPDATE $id MERGE $data")
+            .bind(("id", (JOBS, job_id)))
+            .bind(("data", serde_json::json!({
                 "metadata": metadata,
                 "outputs": outputs,
-            }))
+            })))
+            .await?;
+
+        Ok(())
+    }
+
+    /// Update job by RecordId (used during startup cleanup)
+    pub async fn update_job_by_id(
+        &self,
+        job_id: RecordId,
+        metadata: JobMetadata,
+        outputs: Option<JobOutputs>
+    ) -> Result<()> {
+        self.db
+            .query("UPDATE $id MERGE $data")
+            .bind(("id", job_id))
+            .bind(("data", serde_json::json!({
+                "metadata": metadata,
+                "outputs": outputs,
+            })))
             .await?;
 
         Ok(())
@@ -84,7 +104,7 @@ impl JobDatabase {
         let _: Option<JobRecord> = self.db
             .update((JOBS, job_id))
             .merge(serde_json::json!({
-                "metadata.status": JobStatus::Complete,
+                "metadata.status": JobStatus::COMPLETE,
                 "metadata.progress": 1.0,
                 "metadata.updated_at": chrono::Utc::now(),
                 "metadata.completed_at": chrono::Utc::now(),
@@ -102,7 +122,7 @@ impl JobDatabase {
         let _: Option<JobRecord> = self.db
             .update((JOBS, job_id))
             .merge(serde_json::json!({
-                "metadata.status": JobStatus::Failed,
+                "metadata.status": JobStatus::FAILED,
                 "metadata.error": error,
                 "metadata.updated_at": chrono::Utc::now(),
                 "metadata.completed_at": chrono::Utc::now(),

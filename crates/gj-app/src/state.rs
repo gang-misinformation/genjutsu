@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::StoreOp;
@@ -6,6 +7,7 @@ use winit::window::Window;
 use chrono::Utc;
 use log::info;
 use surrealdb::types::Datetime as SurrealDatetime;
+use surrealdb_types::{RecordIdKey, ToSql};
 use winit::event_loop::EventLoopProxy;
 use gj_core::gaussian_cloud::GaussianCloud;
 use gj_splat::camera::Camera;
@@ -14,7 +16,7 @@ use crate::generator::db::job::JobRecord;
 use crate::events::{AppEvent, GenEvent, GjEvent};
 use crate::generator::Generator;
 use crate::gfx::GfxState;
-use crate::job::JobStatus;
+use crate::job::{JobMetadata, JobOutputs, JobStatus};
 use crate::ui;
 use crate::ui::{UiEvent, UiState};
 
@@ -39,6 +41,9 @@ pub struct AppState {
     pub last_mouse_pos: Option<(f32, f32)>,
 
     pub(crate) generator: Generator,
+
+    // In-memory cache of active job progress (not persisted)
+    pub active_job_progress: HashMap<String, (JobMetadata, Option<JobOutputs>)>,
 }
 
 impl AppState {
@@ -75,13 +80,52 @@ impl AppState {
             status: "Ready".into(),
             mouse_pressed: false,
             last_mouse_pos: None,
-            generator
+            generator,
+            active_job_progress: HashMap::new(),
         };
 
-        // Load existing jobs from database
-        state.load_jobs().await?;
+        // Load existing jobs from database and clean up stale states
+        state.load_and_cleanup_jobs().await?;
 
         Ok(state)
+    }
+
+    /// Load all jobs from database and clean up stale GENERATING states
+    async fn load_and_cleanup_jobs(&mut self) -> anyhow::Result<()> {
+        let mut jobs = self.generator.get_jobs().await?;
+
+        println!("Loaded {} jobs from database", jobs.len());
+
+        // Clean up any jobs stuck in GENERATING or QUEUED state
+        // (they were interrupted when the app closed)
+        for job in &mut jobs {
+            match job.metadata.status {
+                JobStatus::GENERATING | JobStatus::QUEUED => {
+                    println!("Cleaning up stale job: {:?} (was {:?})", job.id, job.metadata.status);
+
+                    // Mark as failed due to interruption
+                    let mut updated_metadata = job.metadata.clone();
+                    updated_metadata.status = JobStatus::FAILED;
+                    updated_metadata.error = Some("Job interrupted by application shutdown".to_string());
+                    updated_metadata.completed_at = Some(SurrealDatetime::from(chrono::Utc::now()));
+                    updated_metadata.updated_at = SurrealDatetime::from(chrono::Utc::now());
+
+                    // Update in database using RecordId directly
+                    self.generator.update_job_status_by_id(
+                        job.id.clone(),
+                        updated_metadata.clone(),
+                        None
+                    ).await?;
+
+                    // Update local copy
+                    job.metadata = updated_metadata;
+                }
+                _ => {}
+            }
+        }
+
+        self.ui.set_jobs(jobs);
+        Ok(())
     }
 
     /// Load all jobs from database and update UI
@@ -303,23 +347,65 @@ impl AppState {
             GenEvent::JobStatus { id, data, outputs } => {
                 info!("Job status update: {} - {:?}", id, data.status);
 
-                // Update job in database
-                self.generator.update_job_status(id.clone(), data.clone(), outputs.clone()).await?;
+                // IMPORTANT: Only write to database for terminal states
+                match data.status {
+                    JobStatus::COMPLETE | JobStatus::FAILED => {
+                        // Terminal state - persist to database
+                        self.generator.update_job_status(id.clone(), data.clone(), outputs.clone()).await?;
 
-                // Refresh UI
-                self.load_jobs().await?;
+                        // Remove from in-memory cache
+                        self.active_job_progress.remove(&id);
 
-                // If job completed successfully, optionally auto-load it
-                if data.status == JobStatus::Complete {
-                    if let Some(outputs) = outputs {
-                        info!("Job complete! PLY at: {}", outputs.ply_path);
-                        self.load_scene_from_path(&outputs.ply_path).await?;
+                        // Refresh UI from database
+                        self.load_jobs().await?;
+
+                        // Auto-load if complete
+                        if data.status == JobStatus::COMPLETE {
+                            if let Some(ref job_outputs) = outputs {
+                                info!("Job complete! PLY at: {}", job_outputs.ply_path);
+                                self.load_scene_from_path(&job_outputs.ply_path).await?;
+                            }
+                        }
+                    }
+                    JobStatus::GENERATING => {
+                        // First GENERATING update - write to DB to mark job as started
+                        if !self.active_job_progress.contains_key(&id) {
+                            self.generator.update_job_status(id.clone(), data.clone(), outputs.clone()).await?;
+                            self.load_jobs().await?;
+                        }
+
+                        // All subsequent updates - memory cache only
+                        self.active_job_progress.insert(id.clone(), (data, outputs));
+
+                        // Update UI directly without hitting database
+                        self.update_ui_job_progress(id.clone(), self.active_job_progress.get(&id).unwrap().clone());
+                    }
+                    JobStatus::QUEUED => {
+                        // Queued state is already written when job is submitted
+                        // Just update UI cache
+                        self.active_job_progress.insert(id.clone(), (data, outputs));
                     }
                 }
             }
         }
 
         Ok(())
+    }
+
+    fn update_ui_job_progress(&mut self, job_id: String, data: (JobMetadata, Option<JobOutputs>)) {
+        // Find the job in the UI state and update it in-place
+        if let Some(job) = self.ui.ui_ctx.jobs.iter_mut().find(|j| {
+            // Extract the ID part from RecordId for comparison
+            match &j.id.key {
+                RecordIdKey::String(id) => *id == job_id,
+                _ => false
+            }
+        }) {
+            job.metadata = data.0;
+            if let Some(outputs) = data.1 {
+                job.outputs = Some(outputs);
+            }
+        }
     }
 
     /// Load a scene by job ID

@@ -66,7 +66,7 @@ impl QueuePanel {
                     // Right side - progress/actions
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         match &job.metadata.status {
-                            JobStatus::Generating => {
+                            JobStatus::GENERATING => {
                                 ui.add(
                                     egui::ProgressBar::new(job.metadata.progress)
                                         .desired_width(150.0)
@@ -74,7 +74,7 @@ impl QueuePanel {
                                         .animate(true)
                                 );
                             }
-                            JobStatus::Complete => {
+                            JobStatus::COMPLETE => {
                                 // Check if this is the currently loaded scene
                                 let is_current = ui_ctx.current_job_id == Some(job.id.clone());
 
@@ -93,7 +93,7 @@ impl QueuePanel {
                                     ui_ctx.send_event(UiEvent::RemoveJob(job.id.clone()));
                                 }
                             }
-                            JobStatus::Failed => {
+                            JobStatus::FAILED => {
                                 if let Some(error) = &job.metadata.error {
                                     ui.label(
                                         RichText::new(error)
@@ -106,7 +106,7 @@ impl QueuePanel {
                                     ui_ctx.send_event(UiEvent::RemoveJob(job.id.clone()));
                                 }
                             }
-                            JobStatus::Queued => {
+                            JobStatus::QUEUED => {
                                 ui.label(RichText::new("Waiting...").color(Color32::GRAY));
                             }
                         }

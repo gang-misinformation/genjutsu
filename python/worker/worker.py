@@ -43,24 +43,18 @@ print()
 # Rust backend callback URL (using host.docker.internal from docker-compose)
 RUST_CALLBACK_URL = os.getenv('RUST_CALLBACK_URL', 'http://host.docker.internal:3000')
 
-def update_job_status(job_id: str, metadata: dict, outputs: dict = None):
-    """Notify Rust app of job status via HTTP callback
 
-    The Rust backend expects:
-    - id: job_id
-    - data: JobMetadata (status, progress, message, etc.)
-    - outputs: Optional JobOutputs (ply_path)
+def notify_rust_only(job_id: str, metadata: dict, outputs: dict = None):
+    """Send status update to Rust app for UI display (no DB write)
+
+    This just updates the UI state, not the persistent database.
     """
     try:
-        # Build payload matching Rust JobStatusResponse schema
         payload = {
             "id": job_id,
             "data": metadata,
             "outputs": outputs
         }
-
-        print(f"Sending callback to {RUST_CALLBACK_URL}/job/{job_id}/progress")
-        print(f"Payload: {payload}")
 
         response = requests.post(
             f"{RUST_CALLBACK_URL}/job/{job_id}/progress",
@@ -69,11 +63,10 @@ def update_job_status(job_id: str, metadata: dict, outputs: dict = None):
         )
 
         if response.status_code != 200:
-            print(f"Warning: Callback failed with status {response.status_code}: {response.text}")
+            print(f"Warning: Callback failed with status {response.status_code}")
 
     except requests.exceptions.RequestException as e:
         print(f"Warning: Failed to notify Rust app: {e}")
-        # Don't fail the job if callback fails
 
 
 @celery_app.task(name='worker.generate_3d', bind=True)
@@ -81,15 +74,12 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
     """
     Generate 3D model from text prompt
 
-    Args:
-        self: Task instance (for progress updates)
-        prompt: Text description
-        model_name: Model to use
-        guidance_scale: Guidance scale parameter
-        num_inference_steps: Number of diffusion steps
+    Database updates only happen at:
+    - Job start (GENERATING)
+    - Job completion (COMPLETE with outputs)
+    - Job failure (FAILED with error)
 
-    Returns:
-        dict with output_path and metadata
+    Progress updates go directly to Rust app for UI only.
     """
     job_id = self.request.id
 
@@ -97,8 +87,8 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
         # Check model exists
         if model_name not in MODELS:
             error_msg = f"Model '{model_name}' not available"
-            # Send failure status
-            update_job_status(
+            # This updates DB via Rust
+            notify_rust_only(
                 job_id,
                 metadata={
                     "status": JobStatus.FAILED.value,
@@ -131,8 +121,8 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
         print(f"Steps: {num_inference_steps}")
         print(f"{'='*60}\n")
 
-        # Initial status update - GENERATING
-        update_job_status(
+        # DB UPDATE #1: Job started
+        notify_rust_only(
             job_id,
             metadata={
                 "status": JobStatus.GENERATING.value,
@@ -145,9 +135,9 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
             }
         )
 
-        # Progress callback
+        # Progress callback - ONLY updates Rust UI, NOT database
         def progress_callback(progress: float, message: str):
-            update_job_status(
+            notify_rust_only(
                 job_id,
                 metadata={
                     "status": JobStatus.GENERATING.value,
@@ -179,7 +169,7 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
             print(f"\n✓ Generation complete: {result_path}")
 
         except ValueError as e:
-            # Generation failed - return helpful error
+            # Generation failed
             error_msg = str(e)
             if "flat" in error_msg.lower() or "degenerate" in error_msg.lower():
                 error_msg = (
@@ -189,7 +179,8 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
                     f"  • Different prompt entirely"
                 )
 
-            update_job_status(
+            # DB UPDATE #2: Job failed
+            notify_rust_only(
                 job_id,
                 metadata={
                     "status": JobStatus.FAILED.value,
@@ -204,13 +195,12 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
             raise ValueError(error_msg)
 
         # Get relative path for Rust app
-        # The path should be relative to project root
         relative_path = str(result_path.relative_to(OUTPUT_DIR.parent))
 
         print(f"Relative path for Rust: {relative_path}")
 
-        # Success - notify with result
-        update_job_status(
+        # DB UPDATE #3: Job completed successfully
+        notify_rust_only(
             job_id,
             metadata={
                 "status": JobStatus.COMPLETE.value,
@@ -234,7 +224,8 @@ def generate_3d(self, prompt: str, model_name: str, guidance_scale: float, num_i
         error_msg = str(e)
         print(f"\n✗ Job failed: {error_msg}\n")
 
-        update_job_status(
+        # DB UPDATE #4: Unexpected failure
+        notify_rust_only(
             job_id,
             metadata={
                 "status": JobStatus.FAILED.value,

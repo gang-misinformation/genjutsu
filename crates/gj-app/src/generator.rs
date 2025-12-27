@@ -41,7 +41,7 @@ impl Generator {
                 num_inference_steps: 64,
             },
             metadata: JobMetadata {
-                status: JobStatus::Queued,
+                status: JobStatus::QUEUED,
                 progress: 0f32,
                 message: resp.message,
                 error: None,
@@ -72,6 +72,15 @@ impl Generator {
         outputs: Option<JobOutputs>
     ) -> anyhow::Result<()> {
         self.db.update_job(job_id, metadata, outputs).await
+    }
+
+    pub async fn update_job_status_by_id(
+        &mut self,
+        record_id: RecordId,
+        metadata: JobMetadata,
+        outputs: Option<JobOutputs>
+    ) -> anyhow::Result<()> {
+        self.db.update_job_by_id(record_id, metadata, outputs).await
     }
 
     /// Clear all completed jobs

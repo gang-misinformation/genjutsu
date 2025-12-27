@@ -5,38 +5,37 @@ use surrealdb_types::SurrealValue;
 use crate::generator::db::job::SurrealDatetime;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, SurrealValue)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum JobStatus {
-    Queued,
-    Generating,
-    Complete,
-    Failed,
+    QUEUED,
+    GENERATING,
+    COMPLETE,
+    FAILED,
 }
 
 impl JobStatus {
     pub fn is_active(&self) -> bool {
-        matches!(self, Self::Queued | Self::Generating)
+        matches!(self, Self::QUEUED | Self::GENERATING)
     }
 
     pub fn is_complete(&self) -> bool {
-        matches!(self, Self::Complete | Self::Failed)
+        matches!(self, Self::COMPLETE | Self::FAILED)
     }
 
     pub fn icon(&self) -> &str {
         match self {
-            Self::Queued => "⏳",
-            Self::Generating => "⚡",
-            Self::Complete => "✅",
-            Self::Failed => "❌",
+            Self::QUEUED => "⏳",
+            Self::GENERATING => "⚡",
+            Self::COMPLETE => "✅",
+            Self::FAILED => "❌",
         }
     }
 
     pub fn color(&self) -> egui::Color32 {
         match self {
-            Self::Queued => egui::Color32::GRAY,
-            Self::Generating => egui::Color32::YELLOW,
-            Self::Complete => egui::Color32::GREEN,
-            Self::Failed => egui::Color32::RED,
+            Self::QUEUED => egui::Color32::GRAY,
+            Self::GENERATING => egui::Color32::YELLOW,
+            Self::COMPLETE => egui::Color32::GREEN,
+            Self::FAILED => egui::Color32::RED,
         }
     }
 }
@@ -44,10 +43,10 @@ impl JobStatus {
 impl fmt::Display for JobStatus{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            JobStatus::Complete => write!(f, "Complete"),
-            JobStatus::Failed => write!(f, "Failed"),
-            JobStatus::Generating => write!(f, "Generating"),
-            JobStatus::Queued => write!(f, "Queued"),
+            JobStatus::COMPLETE => write!(f, "Complete"),
+            JobStatus::FAILED => write!(f, "Failed"),
+            JobStatus::GENERATING => write!(f, "Generating"),
+            JobStatus::QUEUED => write!(f, "Queued"),
         }
     }
 }
